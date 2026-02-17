@@ -1,0 +1,29 @@
+# Build artifacts
+build/
+dist/
+*.spec
+*.egg-info/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project specific
+temp/
+audio/
+cmake-3.28.1-macos-universal/
+cmake.tar.gz
+
+# macOS
+.DS_Store

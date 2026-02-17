@@ -1,0 +1,6 @@
+{
+  "export_format": "wav_16",
+  "output_folder": "same_as_source",
+  "filename_suffix": "DJ OPT",
+  "temp_folder": "./temp"
+}
