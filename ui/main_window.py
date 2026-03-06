@@ -11,6 +11,7 @@ from core.analyzer import AudioAnalyzer
 from core.presets import PresetManager
 from core.processor import AudioProcessor
 from core.background_processor import BackgroundProcessor
+import multiprocessing
 import os
 
 
@@ -29,12 +30,17 @@ class MainWindow(QMainWindow):
 
         self.setup_ui()
         self.setup_dark_theme()
-        # Background processor
-        self.bg_processor = BackgroundProcessor()
-        self.bg_processor.track_started.connect(self.on_track_started)
-        self.bg_processor.track_completed.connect(self.on_track_completed)
-        self.bg_processor.progress_updated.connect(self.on_progress_updated)
-        self.bg_processor.all_completed.connect(self.on_all_completed)
+        # Parallel processor 
+        from core.parallel_processor import ParallelProcessor
+        self.parallel_processor = ParallelProcessor()
+        self.parallel_processor.track_started.connect(self.on_track_started)
+        self.parallel_processor.track_completed.connect(self.on_track_completed)
+        self.parallel_processor.progress_updated.connect(self.on_progress_updated)
+        self.parallel_processor.all_completed.connect(self.on_all_completed)
+
+        # Keep old processor for compatibility
+        self.bg_processor = self.parallel_processor
+
         # Folder watching system
         self.setup_folder_watching()
 
@@ -117,6 +123,16 @@ class MainWindow(QMainWindow):
             "Original_DJ_OPT"
         ])
         layout.addWidget(self.naming_combo)
+
+        # CPU Cores selector (NEW!)
+        layout.addWidget(QLabel("CPU Cores:"))
+        self.cores_combo = QComboBox()
+        cpu_count = multiprocessing.cpu_count()
+        self.cores_combo.addItem(f"Auto ({cpu_count-1} cores)", cpu_count-1)
+        for i in range(1, cpu_count + 1):
+            self.cores_combo.addItem(f"{i} core{'s' if i > 1 else ''}", i)
+        layout.addWidget(self.cores_combo)
+
 
         
         # Progress section
@@ -574,28 +590,44 @@ class MainWindow(QMainWindow):
         if not self.tracks:
             return
         
-        # Setup background processing
+        # Get selected core count
+        max_workers = self.cores_combo.currentData()
+        
+        # Setup parallel processing
         current_preset_key = self.preset_combo.currentData()
         output_format = self.get_output_format()
-        self.bg_processor.setup_batch(self.tracks, current_preset_key, output_format, self.output_folder, self.naming_combo.currentText())
+        
+        # Create new processor with selected core count
+        from core.parallel_processor import ParallelProcessor
+        self.parallel_processor = ParallelProcessor(max_workers=max_workers)
+        self.parallel_processor.track_started.connect(self.on_track_started)
+        self.parallel_processor.track_completed.connect(self.on_track_completed)
+        self.parallel_processor.progress_updated.connect(self.on_progress_updated)
+        self.parallel_processor.all_completed.connect(self.on_all_completed)
+        self.bg_processor = self.parallel_processor
+        
+        self.parallel_processor.setup_batch(
+            self.tracks, 
+            current_preset_key, 
+            output_format, 
+            self.output_folder, 
+            self.naming_combo.currentText()
+        )
 
-        # Update UI for processing state
+        # Update UI
         self.progress_bar.setMaximum(len(self.tracks))
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(True)
-        self.progress_label.setText("Starting batch processing...")
-        
-        # Show queue controls
-        self.pause_button.setVisible(True)
-        self.resume_button.setVisible(False)
+        self.progress_label.setText(f"Processing with {max_workers} cores...")
         
         # Change button to cancel
         self.process_button.setText("⏹ CANCEL ALL")
         self.process_button.clicked.disconnect()
         self.process_button.clicked.connect(self.cancel_processing)
         
-        # Start background processing
-        self.bg_processor.start()
+        # Start parallel processing
+        self.parallel_processor.start()
+
 
 
     def cancel_processing(self):
@@ -622,7 +654,14 @@ class MainWindow(QMainWindow):
         """Handle track processing started"""
         self.track_table.update_track_status(index, 'processing')
         short_name = name[:25] + "..." if len(name) > 25 else name
-        self.progress_label.setText(f"⚡ Processing: {short_name}")
+        
+        # Count currently processing tracks
+        processing_count = sum(1 for i in range(self.track_table.rowCount()) 
+                            if self.track_table.item(i, 8) and 
+                            'Processing' in self.track_table.item(i, 8).text())
+        
+        self.progress_label.setText(f"⚡ Processing {processing_count} tracks: {short_name}")
+
 
     def on_track_completed(self, index, success, message, after_lufs=0.0, final_peak=0.0):
         """Handle track processing completed with enhanced analysis data"""
@@ -754,6 +793,44 @@ class MainWindow(QMainWindow):
     def _add_track_async(self, file_path, target_lufs=None):
         """Add track with background analysis (non-blocking)"""
         from PySide6.QtCore import QThread
+        from PySide6.QtGui import QColor
+        
+        # Add placeholder row immediately for visual feedback
+        filename = os.path.basename(file_path)
+        
+        row_index = self.track_table.rowCount()
+        self.track_table.insertRow(row_index)
+        
+        # Add placeholder cells
+        self.track_table.setItem(row_index, 0, self.track_table._create_item(filename))
+        self.track_table.setItem(row_index, 1, self.track_table._create_item("...", center=True))
+        self.track_table.setItem(row_index, 2, self.track_table._create_item("...", center=True))
+        self.track_table.setItem(row_index, 3, self.track_table._create_item("--", center=True))  # Show -- before processing
+        self.track_table.setItem(row_index, 4, self.track_table._create_item("...", center=True))
+        self.track_table.setItem(row_index, 5, self.track_table._create_item("...", center=True))
+        
+        analyzing_item = self.track_table._create_item("⏳ ANALYZING", center=True)
+        analyzing_item.setBackground(QColor("#ffaa00"))
+        analyzing_item.setForeground(QColor("black"))
+        self.track_table.setItem(row_index, 6, analyzing_item)
+        self.track_table.setItem(row_index, 7, self.track_table._create_item("--", center=True))
+        
+        status_item = self.track_table._create_item("⏳ ANALYZING", center=True)
+        status_item.setBackground(QColor("#ffaa00"))
+        status_item.setForeground(QColor("black"))
+        self.track_table.setItem(row_index, 8, status_item)
+        
+        # Add placeholder to tracks list
+        placeholder_data = {
+            'path': file_path,
+            'name': filename,
+            'lufs': 0.0,
+            'peak_db': 0.0,
+            'duration': 0,
+            'health_score': 0,
+            'status': 'analyzing'
+        }
+        self.tracks.append(placeholder_data)
         
         class TrackAnalyzer(QThread):
             def __init__(self, analyzer, file_path):
@@ -765,27 +842,104 @@ class MainWindow(QMainWindow):
             def run(self):
                 self.analysis = self.analyzer.analyze_track(self.file_path)
         
-        # Create and start analysis thread
         analyzer_thread = TrackAnalyzer(self.analyzer, file_path)
         
-        # Handle completion
         def on_analysis_complete():
             analysis = analyzer_thread.analysis
             
+            # Update track data in place
             track_data = {
                 'path': file_path,
-                'name': os.path.basename(file_path),
+                'name': filename,
                 **analysis
             }
+            self.tracks[row_index] = track_data
             
-            self.tracks.append(track_data)
-            self.track_table.add_track(track_data, target_lufs)
+            # Update cells in place (no remove/insert!)
+            # Duration
+            duration = track_data.get('duration', 0)
+            time_str = f"{int(duration//60)}:{int(duration%60):02d}" if duration > 0 else "0:00"
+            self.track_table.setItem(row_index, 1, self.track_table._create_item(time_str, center=True))
+            
+            # Before LUFS
+            before_lufs = track_data['lufs']
+            lufs_item = self.track_table._create_item(f"{before_lufs:.1f}", center=True)
+            lufs_item.setBackground(self.track_table._get_lufs_color(before_lufs))
+            if before_lufs < -16 or before_lufs > -6:
+                lufs_item.setForeground(QColor("white"))
+            self.track_table.setItem(row_index, 2, lufs_item)
+            
+            # After LUFS - check if already optimized
+            peak = track_data['peak_db']
+            is_optimized = self.track_table._check_if_optimized(before_lufs, peak, target_lufs)
+            
+            if is_optimized:
+                after_item = self.track_table._create_item(f"{before_lufs:.1f}", center=True)
+                after_item.setBackground(QColor("#00aa44"))
+                after_item.setForeground(QColor("white"))
+                self.track_table.setItem(row_index, 3, after_item)
+            else:
+                if target_lufs:
+                    self.track_table.setItem(row_index, 3, self.track_table._create_item(f"{target_lufs:.1f}", center=True))
+                else:
+                    self.track_table.setItem(row_index, 3, self.track_table._create_item("--", center=True))
+            
+            # Peak
+            peak_item = self.track_table._create_item(f"{peak:.1f}", center=True)
+            if peak > -1:
+                peak_item.setBackground(QColor("#ff4444"))
+                peak_item.setForeground(QColor("white"))
+            self.track_table.setItem(row_index, 4, peak_item)
+            
+            # Health Score
+            health_score = track_data.get('health_score', 0)
+            health_item = self.track_table._create_item(f"{health_score}", center=True)
+            health_item.setBackground(self.track_table._get_health_color(health_score))
+            health_item.setForeground(QColor("white"))
+            self.track_table.setItem(row_index, 5, health_item)
+            
+            # Club Safe badge
+            club_safe = self.track_table.is_club_safe(before_lufs, peak)
+            if is_optimized and club_safe:
+                badge_text = "🟢 OPTIMIZED"
+                badge_color = "#00aa44"
+            elif club_safe:
+                badge_text = "🟢 SAFE"
+                badge_color = "#00aa44"
+            else:
+                badge_text = "🔴 FIX"
+                badge_color = "#aa4444"
+            
+            badge_item = self.track_table._create_item(badge_text, center=True)
+            badge_item.setBackground(QColor(badge_color))
+            badge_item.setForeground(QColor("white"))
+            self.track_table.setItem(row_index, 6, badge_item)
+            
+            # Gain
+            if is_optimized:
+                gain_item = self.track_table._create_item("✓", center=True)
+                gain_item.setBackground(QColor("#00aa44"))
+                gain_item.setForeground(QColor("white"))
+                self.track_table.setItem(row_index, 7, gain_item)
+            else:
+                self.track_table.setItem(row_index, 7, self.track_table._create_item("--", center=True))
+            
+            # Status
+            if is_optimized:
+                status_item = self.track_table._create_item("✅ OPTIMIZED", center=True)
+                status_item.setBackground(QColor("#00aa44"))
+                status_item.setForeground(QColor("white"))
+            else:
+                status_item = self.track_table._create_item("READY", center=True)
+                status_item.setBackground(QColor("#4444aa"))
+                status_item.setForeground(QColor("white"))
+            self.track_table.setItem(row_index, 8, status_item)
+            
             self.update_health_display()
         
         analyzer_thread.finished.connect(on_analysis_complete)
         analyzer_thread.start()
         
-        # Store thread reference
         if not hasattr(self, '_analyzer_threads'):
             self._analyzer_threads = []
         self._analyzer_threads.append(analyzer_thread)

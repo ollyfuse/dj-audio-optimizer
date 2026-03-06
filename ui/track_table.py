@@ -82,7 +82,10 @@ class TrackTable(QTableWidget):
         
         # Duration
         duration = track_data.get('duration', 0)
-        time_str = f"{int(duration//60)}:{int(duration%60):02d}"
+        if duration > 0:
+            time_str = f"{int(duration//60)}:{int(duration%60):02d}"
+        else:
+            time_str = "0:00"
         self.setItem(row, 1, self._create_item(time_str, center=True))
         
         # Before LUFS

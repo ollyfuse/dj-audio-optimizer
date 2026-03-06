@@ -36,9 +36,13 @@ class HealthAnalyzer:
         elif peak > -0.5:
             issues.append("near_clipping")
             score -= 15
+        elif peak < -3.0:
+            # Peak is too low - track has too much headroom (not optimized)
+            issues.append("low_peak")
+            score -= 15
         
         # 3. Check LUFS consistency
-        if lufs < -20:
+        if lufs <= -20:
             issues.append("too_quiet")
             score -= 20
         elif lufs > -6:

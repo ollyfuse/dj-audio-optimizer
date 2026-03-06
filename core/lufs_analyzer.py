@@ -40,7 +40,9 @@ class LUFSAnalyzer:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=120,  # Increased to 2 minutes
+                encoding='utf-8',  # Handle special characters
+                errors='replace'  # Replace invalid chars instead of failing
             )
             
             # Extract JSON from stderr
@@ -64,9 +66,13 @@ class LUFSAnalyzer:
                 'threshold': round(float(data.get('input_thresh', -70.0)), 1)
             }
             
-        except (subprocess.TimeoutExpired, json.JSONDecodeError, ValueError) as e:
-            print(f"LUFS measurement failed: {e}")
+        except subprocess.TimeoutExpired as e:
+            print(f"LUFS measurement timed out for: {os.path.basename(file_path)}")
             return None
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"LUFS measurement failed for {os.path.basename(file_path)}: {e}")
+            return None
+
     
     def _extract_duration(self, ffmpeg_output):
         """Extract duration from FFmpeg output"""
