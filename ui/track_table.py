@@ -14,23 +14,23 @@ class TrackTable(QTableWidget):
     
     def setup_table(self):
         """Setup professional table layout and styling"""
-        self.setColumnCount(8)
-        headers = ["Track", "Time", "Before", "After", "Peak", "Club Safe", "Gain", "Status"]
+        self.setColumnCount(9)
+        headers = ["Track", "Time", "Before", "After", "Peak", "Health", "Club Safe", "Gain", "Status"]
         self.setHorizontalHeaderLabels(headers)
         
-        # Optimized column widths
-        widths = [300, 60, 80, 80, 70, 90, 70, 100]
+        widths = [280, 60, 80, 80, 70, 70, 90, 70, 100]
         for i, width in enumerate(widths):
             self.setColumnWidth(i, width)
         
-        # Professional styling
-        self.setAlternatingRowColors(True)
+        # Disable alternating row colors - they override cell backgrounds
+        self.setAlternatingRowColors(False)
         self.setSelectionBehavior(QTableWidget.SelectRows)
         self.verticalHeader().setVisible(False)
         self.setShowGrid(False)
         self.setSortingEnabled(True)
         self.horizontalHeader().setStretchLastSection(True)
         self.verticalHeader().setDefaultSectionSize(40)
+
 
     def show_context_menu(self, position):
         """Professional right-click menu"""
@@ -39,7 +39,7 @@ class TrackTable(QTableWidget):
             return
             
         row = item.row()
-        status_item = self.item(row, 7)
+        status_item = self.item(row, 8)
         
         menu = QMenu(self)
         menu.setStyleSheet("""
@@ -55,13 +55,11 @@ class TrackTable(QTableWidget):
             }
         """)
         
-        # Skip option for pending/processing tracks
         if status_item and ("READY" in status_item.text() or "PROCESSING" in status_item.text()):
             skip_action = menu.addAction("🚫 Skip This Track")
         else:
             skip_action = None
         
-        # Remove option for all tracks
         remove_action = menu.addAction("🗑️ Remove Track")
         
         action = menu.exec(self.mapToGlobal(position))
@@ -71,24 +69,23 @@ class TrackTable(QTableWidget):
         elif action == remove_action:
             self.remove_track_requested.emit(row)
 
-
-    def add_track(self, track_data):
-        """Add track with professional formatting"""
+    def add_track(self, track_data, target_lufs=None):
+        """Add track with professional formatting and optimization detection"""
         row = self.rowCount()
         self.insertRow(row)
         
-        # Track name - clean truncation
+        # Track name
         name = track_data['name']
         if len(name) > 40:
             name = name[:37] + "..."
         self.setItem(row, 0, self._create_item(name))
         
-        # Duration - clean format
+        # Duration
         duration = track_data.get('duration', 0)
         time_str = f"{int(duration//60)}:{int(duration%60):02d}"
         self.setItem(row, 1, self._create_item(time_str, center=True))
         
-        # Before LUFS with color coding
+        # Before LUFS
         before_lufs = track_data['lufs']
         lufs_item = self._create_item(f"{before_lufs:.1f}", center=True)
         lufs_item.setBackground(self._get_lufs_color(before_lufs))
@@ -96,33 +93,110 @@ class TrackTable(QTableWidget):
             lufs_item.setForeground(QColor("white"))
         self.setItem(row, 2, lufs_item)
         
-        # After LUFS - placeholder
-        self.setItem(row, 3, self._create_item("--", center=True))
-        
-        # Peak with color coding
+        # After LUFS - check if already optimized
         peak = track_data['peak_db']
+        is_optimized = self._check_if_optimized(before_lufs, peak, target_lufs)
+        
+        if is_optimized:
+            after_item = self._create_item(f"{before_lufs:.1f}", center=True)
+            after_item.setBackground(QColor("#00aa44"))
+            after_item.setForeground(QColor("white"))
+            self.setItem(row, 3, after_item)
+        else:
+            if target_lufs:
+                self.setItem(row, 3, self._create_item(f"{target_lufs:.1f}", center=True))
+            else:
+                self.setItem(row, 3, self._create_item("--", center=True))
+        
+        # Peak
         peak_item = self._create_item(f"{peak:.1f}", center=True)
         if peak > -1:
             peak_item.setBackground(QColor("#ff4444"))
             peak_item.setForeground(QColor("white"))
         self.setItem(row, 4, peak_item)
         
+        # Health Score (NEW!)
+        health_score = track_data.get('health_score', 0)
+        health_item = self._create_item(f"{health_score}", center=True)
+        health_item.setBackground(self._get_health_color(health_score))
+        health_item.setForeground(QColor("white"))
+        self.setItem(row, 5, health_item)
+        
         # Club Safe badge
         club_safe = self.is_club_safe(before_lufs, peak)
-        badge_text = "🟢 SAFE" if club_safe else "🔴 FIX"
-        badge_item = self._create_item(badge_text, center=True)
-        badge_item.setBackground(QColor("#00aa44") if club_safe else QColor("#aa4444"))
-        badge_item.setForeground(QColor("white"))
-        self.setItem(row, 5, badge_item)
+        if is_optimized and club_safe:
+            badge_text = "🟢 OPTIMIZED"
+            badge_color = "#00aa44"
+        elif club_safe:
+            badge_text = "🟢 SAFE"
+            badge_color = "#00aa44"
+        else:
+            badge_text = "🔴 FIX"
+            badge_color = "#aa4444"
         
-        # Improvement placeholder
-        self.setItem(row, 6, self._create_item("--", center=True))
+        badge_item = self._create_item(badge_text, center=True)
+        badge_item.setBackground(QColor(badge_color))
+        badge_item.setForeground(QColor("white"))
+        self.setItem(row, 6, badge_item)
+        
+        # Gain
+        if is_optimized:
+            gain_item = self._create_item("✓", center=True)
+            gain_item.setBackground(QColor("#00aa44"))
+            gain_item.setForeground(QColor("white"))
+            self.setItem(row, 7, gain_item)
+        else:
+            self.setItem(row, 7, self._create_item("--", center=True))
         
         # Status
-        status_item = self._create_item("READY", center=True)
-        status_item.setBackground(QColor("#4444aa"))
-        status_item.setForeground(QColor("white"))
-        self.setItem(row, 7, status_item)
+        if is_optimized:
+            status_item = self._create_item("✅ OPTIMIZED", center=True)
+            status_item.setBackground(QColor("#00aa44"))
+            status_item.setForeground(QColor("white"))
+        else:
+            status_item = self._create_item("READY", center=True)
+            status_item.setBackground(QColor("#4444aa"))
+            status_item.setForeground(QColor("white"))
+        self.setItem(row, 8, status_item)
+
+    def _get_health_color(self, score):
+        """Get color for health score"""
+        if score >= 80:
+            return QColor("#00aa44")  # Excellent - Green
+        elif score >= 60:
+            return QColor("#88aa00")  # Good - Yellow-green
+        elif score >= 40:
+            return QColor("#ffaa00")  # Fair - Orange
+        else:
+            return QColor("#aa4444")  # Poor - Red
+
+    def _check_if_optimized(self, lufs, peak, target_lufs):
+        """
+        Check if track is already optimized with smart tolerance
+        """
+        if target_lufs is None:
+            return False
+        
+        # Smart tolerance based on target LUFS
+        if target_lufs >= -10:  # Club/Festival range
+            tolerance = 2.0
+        elif target_lufs >= -14:  # Bar/Streaming range
+            tolerance = 1.5
+        else:  # Radio/Broadcast range
+            tolerance = 1.0
+        
+        lufs_ok = abs(lufs - target_lufs) <= tolerance
+        
+        # Peak should be below 0 dB (negative value)
+        # -0.2 dB is safe, 0.6 dB is clipping
+        peak_ok = peak < 0.0
+        
+        # Also check if track is already in "club safe" range
+        in_club_range = -14 <= lufs <= -8 and peak_ok
+        
+        return lufs_ok and peak_ok
+
+
 
     def update_track_status(self, row, status):
         """Update status with professional styling"""
@@ -130,7 +204,8 @@ class TrackTable(QTableWidget):
             'processing': ("⚡ PROCESSING", "#ffaa00", "black"),
             'completed': ("✅ DONE", "#00aa44", "white"),
             'skipped': ("🚫 SKIP", "#666666", "white"),
-            'error': ("❌ ERROR", "#aa4444", "white")
+            'error': ("❌ ERROR", "#aa4444", "white"),
+            'optimized': ("✅ OPTIMIZED", "#00aa44", "white")
         }
         
         if status in status_configs:
@@ -138,7 +213,7 @@ class TrackTable(QTableWidget):
             status_item = self._create_item(text, center=True)
             status_item.setBackground(QColor(bg_color))
             status_item.setForeground(QColor(fg_color))
-            self.setItem(row, 7, status_item)
+            self.setItem(row, 8, status_item)
 
     def update_after_processing(self, row, after_lufs, final_peak):
         """Update with processing results"""
@@ -149,13 +224,15 @@ class TrackTable(QTableWidget):
         self.setItem(row, 3, after_item)
         
         # Calculate improvement
-        before_lufs = float(self.item(row, 2).text())
-        improvement = after_lufs - before_lufs
-        gain_text = f"+{improvement:.1f}" if improvement > 0 else f"{improvement:.1f}"
-        gain_item = self._create_item(gain_text, center=True)
-        gain_item.setBackground(QColor("#00aa44") if improvement > 0 else QColor("#ffaa00"))
-        gain_item.setForeground(QColor("white"))
-        self.setItem(row, 6, gain_item)
+        before_item = self.item(row, 2)
+        if before_item:
+            before_lufs = float(before_item.text())
+            improvement = after_lufs - before_lufs
+            gain_text = f"+{improvement:.1f}" if improvement > 0 else f"{improvement:.1f}"
+            gain_item = self._create_item(gain_text, center=True)
+            gain_item.setBackground(QColor("#00aa44") if improvement > 0 else QColor("#ffaa00"))
+            gain_item.setForeground(QColor("white"))
+            self.setItem(row, 7, gain_item)
         
         # Update Club Safe
         club_safe = self.is_club_safe(after_lufs, final_peak)
@@ -163,7 +240,7 @@ class TrackTable(QTableWidget):
         badge_item = self._create_item(badge_text, center=True)
         badge_item.setBackground(QColor("#00aa44") if club_safe else QColor("#ffaa00"))
         badge_item.setForeground(QColor("white"))
-        self.setItem(row, 5, badge_item)
+        self.setItem(row, 6, badge_item)
 
     def _create_item(self, text, center=False):
         """Create styled table item"""
@@ -175,21 +252,23 @@ class TrackTable(QTableWidget):
     def _get_lufs_color(self, lufs):
         """Get color for LUFS value"""
         if lufs < -16:
-            return QColor("#aa4444")  # Too quiet - red
+            return QColor("#aa4444")
         elif lufs > -6:
-            return QColor("#ffaa00")  # Too loud - orange
+            return QColor("#ffaa00")
         else:
-            return QColor("transparent")  # Good range
+            return QColor("transparent")
 
     def is_club_safe(self, lufs, peak_db):
         """Professional club-safe criteria"""
-        return -14 <= lufs <= -8 and peak_db < -1
+        return -14 <= lufs <= -8 and peak_db < 0.0
 
     def get_track_count(self):
         return self.rowCount()
     
     def update_target_lufs(self, target_lufs):
-        """Update target LUFS display"""
+        """Update target LUFS display - with null check"""
         for row in range(self.rowCount()):
-            if self.item(row, 3).text() == "--":
+            after_item = self.item(row, 3)
+            # Only update if item exists and is placeholder
+            if after_item and after_item.text() == "--":
                 self.setItem(row, 3, self._create_item(f"{target_lufs:.1f}", center=True))

@@ -1,3 +1,6 @@
+from core.watch_config import WatchConfig
+from core.folder_watcher import FolderWatcher
+from .folder_watch_panel import FolderWatchPanel
 from PySide6.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, 
                                QPushButton, QLabel, QFileDialog, QComboBox, QFrame, QProgressBar, QApplication, QLineEdit)
 
@@ -18,7 +21,12 @@ class MainWindow(QMainWindow):
         self.preset_manager = PresetManager()
         self.processor = AudioProcessor()
         self.tracks = []
-        self.output_folder = os.path.expanduser("~/Desktop")  # Move this line up
+        self.output_folder = os.path.expanduser("~/Desktop")  
+
+        # Initialize folder watching BEFORE setup_ui
+        self.watch_config = WatchConfig()
+        self.folder_watcher = FolderWatcher()
+
         self.setup_ui()
         self.setup_dark_theme()
         # Background processor
@@ -27,6 +35,8 @@ class MainWindow(QMainWindow):
         self.bg_processor.track_completed.connect(self.on_track_completed)
         self.bg_processor.progress_updated.connect(self.on_progress_updated)
         self.bg_processor.all_completed.connect(self.on_all_completed)
+        # Folder watching system
+        self.setup_folder_watching()
 
             
     def setup_ui(self):
@@ -164,15 +174,39 @@ class MainWindow(QMainWindow):
         layout.addWidget(queue_widget)
 
     def create_center_panel(self):
-        """Center panel: Drag & drop area and track table"""
+        """Center panel: Track table and folder monitoring"""
         panel = QFrame()
         panel.setFrameStyle(QFrame.StyledPanel)
         layout = QVBoxLayout(panel)
         
+        # Create tab widget
+        from PySide6.QtWidgets import QTabWidget
+        tabs = QTabWidget()
+        tabs.setStyleSheet("""
+            QTabWidget::pane {
+                border: 1px solid #444;
+                background-color: #2d2d2d;
+            }
+            QTabBar::tab {
+                background-color: #2d2d2d;
+                color: white;
+                padding: 8px 16px;
+                border: 1px solid #444;
+            }
+            QTabBar::tab:selected {
+                background-color: #00ff88;
+                color: black;
+            }
+        """)
+        
+        # Track Library Tab
+        library_widget = QWidget()
+        library_layout = QVBoxLayout(library_widget)
+        
         # Drag & drop area
         drop_area = DragDropWidget("📁 Drag & Drop Audio Files Here\n\nOr click 'Add Tracks' below")
         drop_area.files_dropped.connect(self.handle_dropped_files)
-        layout.addWidget(drop_area)
+        library_layout.addWidget(drop_area)
         
         # Button layout
         button_layout = QHBoxLayout()
@@ -184,15 +218,47 @@ class MainWindow(QMainWindow):
         clear_button.clicked.connect(self.clear_tracks)
         button_layout.addWidget(clear_button)
 
-        layout.addLayout(button_layout)
+        library_layout.addLayout(button_layout)
         
         # Track table
         self.track_table = TrackTable()
         self.track_table.skip_track_requested.connect(self.skip_track)
         self.track_table.remove_track_requested.connect(self.remove_track)
-        layout.addWidget(self.track_table)
+        library_layout.addWidget(self.track_table)
+        
+        # Folder Watch Tab
+        self.folder_watch_panel = FolderWatchPanel(self.preset_manager, self.watch_config)
+        self.folder_watch_panel.watch_added.connect(self.on_watch_added)
+        self.folder_watch_panel.watch_removed.connect(self.on_watch_removed)
+        self.folder_watch_panel.watch_toggled.connect(self.on_watch_toggled)
+        
+        # Add tabs
+        tabs.addTab(library_widget, "📚 Track Library")
+        tabs.addTab(self.folder_watch_panel, "📁 Folder Monitoring")
+        
+        layout.addWidget(tabs)
         
         return panel
+    
+    def on_watch_added(self, path, config):
+        """Handle watch folder added"""
+        self.folder_watcher.add_watch(path, config)
+
+    def on_watch_removed(self, path):
+        """Handle watch folder removed"""
+        self.folder_watcher.remove_watch(path)
+
+    def on_watch_toggled(self, path, enabled):
+        """Handle watch folder toggled"""
+        if enabled:
+            # Find config and re-add watch
+            for config in self.watch_config.watched_folders:
+                if config['path'] == path:
+                    self.folder_watcher.add_watch(path, config)
+                    break
+        else:
+            self.folder_watcher.remove_watch(path)
+
 
 
     def clear_tracks(self):
@@ -201,26 +267,102 @@ class MainWindow(QMainWindow):
         self.track_table.setRowCount(0)
         self.progress_label.setText("Ready to process")
         self.progress_bar.setVisible(False)
+        self.update_health_display()
 
+    def update_health_display(self):
+        """Update compact health display in right panel"""
+        if not self.tracks:
+            self.health_score_label.setText("--")
+            self.health_breakdown.setText("<i>No tracks loaded</i>")
+            return
+        
+        # Calculate overall health
+        total_tracks = len(self.tracks)
+        total_score = sum(t.get('health_score', 0) for t in self.tracks)
+        avg_score = int(total_score / total_tracks) if total_tracks > 0 else 0
+        
+        # Update score with color
+        score_color = self._get_health_color(avg_score)
+        self.health_score_label.setText(str(avg_score))
+        self.health_score_label.setStyleSheet(f"""
+            font-size: 36px; 
+            font-weight: bold; 
+            color: {score_color};
+            padding: 10px;
+        """)
+        
+        # Count by status
+        excellent = sum(1 for t in self.tracks if t.get('health_score', 0) >= 80)
+        good = sum(1 for t in self.tracks if 60 <= t.get('health_score', 0) < 80)
+        fair = sum(1 for t in self.tracks if 40 <= t.get('health_score', 0) < 60)
+        poor = sum(1 for t in self.tracks if t.get('health_score', 0) < 40)
+        
+        # Count issues
+        from collections import Counter
+        all_issues = []
+        for track in self.tracks:
+            all_issues.extend(track.get('health_issues', []))
+        
+        issue_counts = Counter(all_issues)
+        clipping = issue_counts.get('clipping', 0) + issue_counts.get('near_clipping', 0)
+        quiet = issue_counts.get('too_quiet', 0)
+        compressed = issue_counts.get('over_compressed', 0)
+        
+        # Build compact breakdown text
+        breakdown_text = f"""
+    <b>{total_tracks} tracks loaded</b><br><br>
+
+    <span style='color: #00aa44;'>🟢 {excellent} Excellent</span><br>
+    <span style='color: #88aa00;'>🟡 {good} Good</span><br>
+    <span style='color: #ffaa00;'>🟠 {fair} Fair</span><br>
+    <span style='color: #aa4444;'>🔴 {poor} Poor</span><br><br>
+
+    <b>Issues:</b><br>
+    <span style='color: #ff4444;'>⚠️ {clipping} Clipping</span><br>
+    <span style='color: #ffaa00;'>🔇 {quiet} Too Quiet</span><br>
+    <span style='color: #ffaa00;'>📉 {compressed} Compressed</span>
+        """
+        
+        self.health_breakdown.setText(breakdown_text)
+
+    def _get_health_color(self, score):
+        """Get color for health score"""
+        if score >= 80:
+            return "#00aa44"
+        elif score >= 60:
+            return "#88aa00"
+        elif score >= 40:
+            return "#ffaa00"
+        else:
+            return "#aa4444"
+        
+    def _is_processed_file(self, filename):
+        """Check if filename indicates it's already been processed"""
+        processed_patterns = [
+            '- DJ OPT',
+            'DJ OPT -',
+            '(Optimized)',
+            '_DJ_OPT'
+        ]
+        return any(pattern in filename for pattern in processed_patterns)
     
     def handle_dropped_files(self, file_paths):
         """Handle files dropped onto the drag & drop area"""
-        for file_path in file_paths:
-            analysis = self.analyzer.analyze_track(file_path)
-            track_data = {
-                'path': file_path,
-                'name': file_path.split('/')[-1],
-                **analysis
-            }
-            self.tracks.append(track_data)
-            self.track_table.add_track(track_data)
+        # Get current target LUFS
+        current_preset_key = self.preset_combo.currentData()
+        target_lufs = None
+        if current_preset_key:
+            preset = self.preset_manager.get_preset(current_preset_key)
+            target_lufs = preset['target_lufs']
         
-        # Update target LUFS for new tracks
-        self.on_preset_changed()
+        # Add all files asynchronously (NON-BLOCKING!)
+        for file_path in file_paths:
+            self._add_track_async(file_path, target_lufs)
+
 
     
     def create_right_panel(self):
-        """Right panel: Preset summary and info"""
+        """Right panel: Preset summary, Health dashboard, and info"""
         panel = QFrame()
         panel.setFrameStyle(QFrame.StyledPanel)
         layout = QVBoxLayout(panel)
@@ -236,13 +378,42 @@ class MainWindow(QMainWindow):
         self.preset_info.setWordWrap(True)
         layout.addWidget(self.preset_info)
         
+        # Divider
+        divider = QFrame()
+        divider.setFrameShape(QFrame.HLine)
+        divider.setStyleSheet("background-color: #444; margin: 10px 0;")
+        layout.addWidget(divider)
+        
+        # Health Dashboard (NEW - COMPACT VERSION!)
+        health_title = QLabel("💊 LIBRARY HEALTH")
+        health_title.setStyleSheet("font-weight: bold; color: #00ff88; font-size: 14px;")
+        layout.addWidget(health_title)
+        
+        # Health score (big number)
+        self.health_score_label = QLabel("--")
+        self.health_score_label.setStyleSheet("""
+            font-size: 36px; 
+            font-weight: bold; 
+            color: #00ff88;
+            padding: 10px;
+        """)
+        self.health_score_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.health_score_label)
+        
+        # Health breakdown
+        self.health_breakdown = QLabel()
+        self.health_breakdown.setStyleSheet("color: white; padding: 5px; font-size: 11px;")
+        self.health_breakdown.setWordWrap(True)
+        layout.addWidget(self.health_breakdown)
+        
         layout.addStretch()
         
         # Update preset info
         self.update_preset_info()
+        self.update_health_display()
 
         # Copyright section
-        copyright_label = QLabel("© 2026 DJ-FUSE\nProfessional DJ Audio Optimizer -")
+        copyright_label = QLabel("© 2026 DJ-FUSE\nProfessional DJ Audio Optimizer")
         copyright_label.setStyleSheet('''
             color: #666; 
             font-size: 10px; 
@@ -251,9 +422,9 @@ class MainWindow(QMainWindow):
         ''')
         copyright_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(copyright_label)
-
         
         return panel
+
     
     def on_preset_changed(self):
         """Update preset info when preset changes"""
@@ -291,18 +462,17 @@ class MainWindow(QMainWindow):
             "Audio Files (*.mp3 *.wav *.flac *.aiff)"
         )
         
-        for file_path in files:
-            analysis = self.analyzer.analyze_track(file_path)
-            track_data = {
-                'path': file_path,
-                'name': file_path.split('/')[-1],
-                **analysis
-            }
-            self.tracks.append(track_data)
-            self.track_table.add_track(track_data)
+        # Get current target LUFS
+        current_preset_key = self.preset_combo.currentData()
+        target_lufs = None
+        if current_preset_key:
+            preset = self.preset_manager.get_preset(current_preset_key)
+            target_lufs = preset['target_lufs']
         
-        # Update target LUFS for new tracks
-        self.on_preset_changed()
+        # Add all files asynchronously (NON-BLOCKING!)
+        for file_path in files:
+            self._add_track_async(file_path, target_lufs)
+
     
     def get_output_format(self):
         """Get the selected output format"""
@@ -499,8 +669,219 @@ class MainWindow(QMainWindow):
             # Remove from table
             self.track_table.removeRow(track_index)
 
+    def setup_folder_watching(self):
+        """Initialize folder watching for enabled folders"""
+        for folder_config in self.watch_config.get_enabled_folders():
+            self.folder_watcher.add_watch(folder_config['path'], folder_config)
+        
+        # Connect file detection signal
+        self.folder_watcher.file_detected.connect(self.on_file_detected)
+
+    def on_file_detected(self, file_path, watch_folder_path):
+        """Handle new file detected in watched folder"""
+        # Find the config for this watch folder
+        config = None
+        for folder_config in self.watch_config.watched_folders:
+            if folder_config['path'] == watch_folder_path:
+                config = folder_config
+                break
+        
+        if not config or not config.get('enabled', True):
+            return
+        
+        # IGNORE ALREADY PROCESSED FILES (prevents infinite loop)
+        filename = os.path.basename(file_path)
+        if self._is_processed_file(filename):
+            if hasattr(self, 'folder_watch_panel'):
+                self.folder_watch_panel.log_activity(f"Ignored processed file: {filename}")
+            return
+        
+        # Check for duplicates
+        for track in self.tracks:
+            if track['path'] == file_path:
+                if hasattr(self, 'folder_watch_panel'):
+                    self.folder_watch_panel.log_activity(f"Duplicate skipped: {os.path.basename(file_path)}")
+                return
+        
+        # Log detection
+        if hasattr(self, 'folder_watch_panel'):
+            self.folder_watch_panel.log_file_detected(file_path)
+        
+        # Analyze in background (non-blocking)
+        from PySide6.QtCore import QThread
+        
+        class TrackAnalyzer(QThread):
+            def __init__(self, analyzer, file_path):
+                super().__init__()
+                self.analyzer = analyzer
+                self.file_path = file_path
+                self.analysis = None
+            
+            def run(self):
+                self.analysis = self.analyzer.analyze_track(self.file_path)
+        
+        analyzer_thread = TrackAnalyzer(self.analyzer, file_path)
+        
+        def on_analysis_complete():
+            analysis = analyzer_thread.analysis
+            
+            track_data = {
+                'path': file_path,
+                'name': os.path.basename(file_path),
+                **analysis
+            }
+            
+            self.tracks.append(track_data)
+            
+            preset = self.preset_manager.get_preset(config['presetId'])
+            target_lufs = preset['target_lufs'] if preset else -12.0
+            
+            self.track_table.add_track(track_data, target_lufs)
+            self.update_health_display()
+            
+            # Auto-process if enabled
+            if config.get('autoProcess', True):
+                self.auto_process_track(len(self.tracks) - 1, config)
+        
+        analyzer_thread.finished.connect(on_analysis_complete)
+        analyzer_thread.start()
+        
+        if not hasattr(self, '_analyzer_threads'):
+            self._analyzer_threads = []
+        self._analyzer_threads.append(analyzer_thread)
 
 
+    def _add_track_async(self, file_path, target_lufs=None):
+        """Add track with background analysis (non-blocking)"""
+        from PySide6.QtCore import QThread
+        
+        class TrackAnalyzer(QThread):
+            def __init__(self, analyzer, file_path):
+                super().__init__()
+                self.analyzer = analyzer
+                self.file_path = file_path
+                self.analysis = None
+            
+            def run(self):
+                self.analysis = self.analyzer.analyze_track(self.file_path)
+        
+        # Create and start analysis thread
+        analyzer_thread = TrackAnalyzer(self.analyzer, file_path)
+        
+        # Handle completion
+        def on_analysis_complete():
+            analysis = analyzer_thread.analysis
+            
+            track_data = {
+                'path': file_path,
+                'name': os.path.basename(file_path),
+                **analysis
+            }
+            
+            self.tracks.append(track_data)
+            self.track_table.add_track(track_data, target_lufs)
+            self.update_health_display()
+        
+        analyzer_thread.finished.connect(on_analysis_complete)
+        analyzer_thread.start()
+        
+        # Store thread reference
+        if not hasattr(self, '_analyzer_threads'):
+            self._analyzer_threads = []
+        self._analyzer_threads.append(analyzer_thread)
+
+
+
+
+    def auto_process_track(self, track_index, config):
+        """Auto-process a single track from watched folder (non-blocking)"""
+        if track_index >= len(self.tracks):
+            return
+        
+        track = self.tracks[track_index]
+        
+        # Get output folder
+        output_folder = config.get('outputFolder', config['path'])
+        
+        # Process the track
+        input_path = track['path']
+        filename = track['name']
+        
+        # Use the preset's output format
+        preset = self.preset_manager.get_preset(config['presetId'])
+        output_format = preset.get('output_format', 'wav_24') if preset else 'wav_24'
+        
+        # Generate output filename
+        output_filename = self.bg_processor.get_output_filename(filename, output_format)
+        output_path = os.path.join(output_folder, output_filename)
+        
+        # Update status
+        self.track_table.update_track_status(track_index, 'processing')
+        
+        # Process in background thread (NON-BLOCKING!)
+        from PySide6.QtCore import QThread
+        
+        class SingleTrackProcessor(QThread):
+            def __init__(self, processor, input_path, preset_id, output_path, output_format):
+                super().__init__()
+                self.processor = processor
+                self.input_path = input_path
+                self.preset_id = preset_id
+                self.output_path = output_path
+                self.output_format = output_format
+                self.result = None
+            
+            def run(self):
+                self.result = self.processor.process_track(
+                    self.input_path, 
+                    self.preset_id, 
+                    self.output_path, 
+                    self.output_format
+                )
+        
+        # Create and start thread
+        thread = SingleTrackProcessor(
+            self.processor, 
+            input_path, 
+            config['presetId'], 
+            output_path, 
+            output_format
+        )
+        
+        # Handle completion
+        def on_finished():
+            result = thread.result
+            
+            if result and result['success']:
+                self.track_table.update_track_status(track_index, 'completed')
+                after_lufs = result.get('final_lufs', -12.0)
+                final_peak = -1.0
+                self.track_table.update_after_processing(track_index, after_lufs, final_peak)
+                
+                # DELETE ORIGINAL IF ENABLED
+                if config.get('deleteOriginal', False):
+                    try:
+                        os.remove(input_path)
+                        if hasattr(self, 'folder_watch_panel'):
+                            self.folder_watch_panel.log_activity(f"🗑 Deleted original: {filename}")
+                    except Exception as e:
+                        if hasattr(self, 'folder_watch_panel'):
+                            self.folder_watch_panel.log_activity(f"⚠️ Failed to delete: {filename} - {str(e)}")
+                
+                if hasattr(self, 'folder_watch_panel'):
+                    self.folder_watch_panel.log_file_processed(input_path, True)
+            else:
+                self.track_table.update_track_status(track_index, 'error')
+                if hasattr(self, 'folder_watch_panel'):
+                    self.folder_watch_panel.log_file_processed(input_path, False)
+        
+        thread.finished.connect(on_finished)
+        thread.start()
+        
+        # Store thread reference to prevent garbage collection
+        if not hasattr(self, '_auto_process_threads'):
+            self._auto_process_threads = []
+        self._auto_process_threads.append(thread)
 
     
     def setup_dark_theme(self):
@@ -525,7 +906,10 @@ class MainWindow(QMainWindow):
                 background-color: #2d2d2d; border: 1px solid #444; border-radius: 6px;
                 gridline-color: #444;
             }
-            QTableWidget::item { padding: 8px; border-bottom: 1px solid #333; }
+            QTableWidget::item { 
+                padding: 8px; 
+                border-bottom: 1px solid #333; 
+            }
             QTableWidget::item:selected { background-color: #00ff88; color: black; }
             QHeaderView::section {
                 background-color: #333; color: white; padding: 8px;
@@ -533,3 +917,8 @@ class MainWindow(QMainWindow):
             }
             QLabel { color: white; }
         """)
+
+    def closeEvent(self, event):
+        """Clean up when closing the app"""
+        self.folder_watcher.stop()
+        event.accept()

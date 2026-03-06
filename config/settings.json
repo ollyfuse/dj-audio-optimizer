@@ -2,5 +2,15 @@
   "export_format": "wav_16",
   "output_folder": "same_as_source",
   "filename_suffix": "DJ OPT",
-  "temp_folder": "./temp"
+  "temp_folder": "./temp",
+  "watchedFolders": [
+    {
+      "path": "/Users/admin/Desktop/Music/test-auto-watcher",
+      "presetId": "club_festival",
+      "autoProcess": true,
+      "outputFolder": "/Users/admin/Desktop/Music/test-auto-watcher",
+      "deleteOriginal": true,
+      "enabled": true
+    }
+  ]
 }
