@@ -1,6 +1,7 @@
 from core.watch_config import WatchConfig
 from core.folder_watcher import FolderWatcher
 from .folder_watch_panel import FolderWatchPanel
+from .preset_manager_dialog import PresetManagerDialog
 from PySide6.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, 
                                QPushButton, QLabel, QFileDialog, QComboBox, QFrame, QProgressBar, QApplication, QLineEdit)
 
@@ -67,55 +68,78 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(right_panel, 1)
     
     def create_left_panel(self):
-        """Left panel: Logo, Preset selector, Output format, Process button"""
+        """Left panel: Clean and minimal design"""
         panel = QFrame()
         panel.setFrameStyle(QFrame.StyledPanel)
-        layout = QVBoxLayout(panel)
+        panel.setMinimumWidth(260)
+        panel.setMaximumWidth(300)
         
-        # App logo
-        logo = QLabel("🎧 DECKREADY")
-        logo.setStyleSheet("font-size: 24px; font-weight: bold; color: #00ff88; padding: 20px;")
+        # Scrollable content
+        from PySide6.QtWidgets import QScrollArea
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setSpacing(12)
+        layout.setContentsMargins(15, 15, 15, 15)
+        
+        # Logo
+        logo = QLabel("DECKREADY")
+        logo.setStyleSheet("font-size: 18px; font-weight: bold; color: #00ff88;")
         logo.setAlignment(Qt.AlignCenter)
         layout.addWidget(logo)
         
-        # Preset selector
-        layout.addWidget(QLabel("Preset:"))
+        # Preset
+        layout.addWidget(QLabel("Preset"))
+        preset_row = QHBoxLayout()
+        preset_row.setSpacing(5)
         self.preset_combo = QComboBox()
-        presets = self.preset_manager.get_all_presets()
-        for key, preset in presets.items():
-            self.preset_combo.addItem(preset['label'], key)
+        self.preset_combo.setMinimumHeight(30)
+        self.refresh_preset_combo()
         self.preset_combo.currentTextChanged.connect(self.on_preset_changed)
-        layout.addWidget(self.preset_combo)
+        preset_row.addWidget(self.preset_combo, 1)
         
-        # Output format selector
-        layout.addWidget(QLabel("Output Format:"))
+        manage_btn = QPushButton("Edit")
+        manage_btn.setFixedHeight(30)
+        manage_btn.setFixedWidth(50)
+        manage_btn.clicked.connect(self.open_preset_manager)
+        preset_row.addWidget(manage_btn)
+        layout.addLayout(preset_row)
+        
+        # Output Format
+        layout.addWidget(QLabel("Output Format"))
         self.format_combo = QComboBox()
+        self.format_combo.setMinimumHeight(30)
         self.format_combo.addItems(["WAV 24-bit", "WAV 16-bit", "AIFF", "FLAC"])
         layout.addWidget(self.format_combo)
-
-        # Export settings section
-        layout.addWidget(QLabel("📁 EXPORT SETTINGS"))
-
-        # Output folder
-        layout.addWidget(QLabel("Output Folder:"))
-        folder_layout = QHBoxLayout()
+        
+        # Spacing
+        layout.addSpacing(10)
+        
+        # Output Folder
+        layout.addWidget(QLabel("Output Folder"))
+        folder_row = QHBoxLayout()
+        folder_row.setSpacing(5)
         self.folder_display = QLineEdit()
         self.folder_display.setText(self.output_folder)
         self.folder_display.setReadOnly(True)
-        folder_layout.addWidget(self.folder_display)
-
-        browse_button = QPushButton("📂")
-        browse_button.setMaximumWidth(40)
-        browse_button.clicked.connect(self.browse_output_folder)
-        folder_layout.addWidget(browse_button)
-
-        folder_widget = QWidget()
-        folder_widget.setLayout(folder_layout)
-        layout.addWidget(folder_widget)
-
-        # Naming convention
-        layout.addWidget(QLabel("Naming:"))
+        self.folder_display.setMinimumHeight(30)
+        folder_row.addWidget(self.folder_display, 1)
+        
+        browse_btn = QPushButton("Browse")
+        browse_btn.setFixedHeight(30)
+        browse_btn.setFixedWidth(70)
+        browse_btn.clicked.connect(self.browse_output_folder)
+        folder_row.addWidget(browse_btn)
+        layout.addLayout(folder_row)
+        
+        # Naming
+        layout.addWidget(QLabel("Naming"))
         self.naming_combo = QComboBox()
+        self.naming_combo.setMinimumHeight(30)
         self.naming_combo.addItems([
             "Original - DJ OPT",
             "DJ OPT - Original", 
@@ -123,71 +147,129 @@ class MainWindow(QMainWindow):
             "Original_DJ_OPT"
         ])
         layout.addWidget(self.naming_combo)
-
-        # CPU Cores selector (NEW!)
-        layout.addWidget(QLabel("CPU Cores:"))
+        
+        # CPU Cores
+        layout.addWidget(QLabel("CPU Cores"))
         self.cores_combo = QComboBox()
+        self.cores_combo.setMinimumHeight(30)
         cpu_count = multiprocessing.cpu_count()
-        self.cores_combo.addItem(f"Auto ({cpu_count-1} cores)", cpu_count-1)
+        self.cores_combo.addItem(f"Auto ({cpu_count-1})", cpu_count-1)
         for i in range(1, cpu_count + 1):
             self.cores_combo.addItem(f"{i} core{'s' if i > 1 else ''}", i)
         layout.addWidget(self.cores_combo)
-
-
         
-        # Progress section
-        self.create_progress_section(layout)
+        # Spacing
+        layout.addSpacing(10)
         
-        layout.addStretch()
-        
-        # Process button
-        self.process_button = QPushButton("🔥 PROCESS TRACKS")
-        self.process_button.setMinimumHeight(60)
-        self.process_button.clicked.connect(self.process_tracks)
-        layout.addWidget(self.process_button)
-        
-        return panel
-    
-    def create_progress_section(self, layout):
-        """Add progress bar section with queue controls"""
-        # Progress label
-        self.progress_label = QLabel("Ready to process")
-        self.progress_label.setStyleSheet("color: #00ff88; font-weight: bold;")
+        # Progress
+        self.progress_label = QLabel("Ready")
+        self.progress_label.setStyleSheet("color: #00ff88; font-size: 11px;")
+        self.progress_label.setWordWrap(True)
         layout.addWidget(self.progress_label)
         
-        # Progress bar
         self.progress_bar = QProgressBar()
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
-                border: 1px solid #444;
-                border-radius: 4px;
-                background-color: #2d2d2d;
-                color: white;
-                text-align: center;
-            }
-            QProgressBar::chunk {
-                background-color: #00ff88;
-                border-radius: 3px;
-            }
-        """)
+        self.progress_bar.setFixedHeight(18)
         self.progress_bar.setVisible(False)
         layout.addWidget(self.progress_bar)
         
-        # Queue control buttons
-        queue_layout = QHBoxLayout()
-        self.pause_button = QPushButton("⏸ PAUSE")
-        self.pause_button.setVisible(False)
-        self.pause_button.clicked.connect(self.pause_processing)
-        queue_layout.addWidget(self.pause_button)
+        layout.addStretch()
         
-        self.resume_button = QPushButton("▶ RESUME")
-        self.resume_button.setVisible(False)
-        self.resume_button.clicked.connect(self.resume_processing)
-        queue_layout.addWidget(self.resume_button)
+        # Process Button
+        self.process_button = QPushButton("PROCESS TRACKS")
+        self.process_button.setMinimumHeight(45)
+        self.process_button.setStyleSheet("""
+            QPushButton {
+                background-color: #00ff88;
+                color: black;
+                font-weight: bold;
+                font-size: 13px;
+                border: none;
+                border-radius: 6px;
+            }
+            QPushButton:hover {
+                background-color: #00dd77;
+            }
+        """)
+        self.process_button.clicked.connect(self.process_tracks)
+        layout.addWidget(self.process_button)
         
-        queue_widget = QWidget()
-        queue_widget.setLayout(queue_layout)
-        layout.addWidget(queue_widget)
+        scroll.setWidget(content)
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(0, 0, 0, 0)
+        panel_layout.addWidget(scroll)
+        
+        return panel
+    
+    def refresh_preset_combo(self):
+        """Refresh preset dropdown with all presets"""
+        current_selection = self.preset_combo.currentData()
+        self.preset_combo.clear()
+        
+        presets = self.preset_manager.get_all_presets()
+        for key, preset in presets.items():
+            self.preset_combo.addItem(preset['label'], key)
+        
+        # Restore selection if still exists
+        if current_selection:
+            index = self.preset_combo.findData(current_selection)
+            if index >= 0:
+                self.preset_combo.setCurrentIndex(index)
+
+    def open_preset_manager(self):
+        """Open preset manager dialog"""
+        dialog = PresetManagerDialog(self.preset_manager, self)
+        if dialog.exec():
+            # Refresh preset combo after changes
+            self.preset_manager.load_presets()  # Reload from disk
+            self.refresh_preset_combo()
+            self.update_preset_info()
+
+
+
+    # def create_progress_section(self, layout):
+    #     """Add progress bar section with queue controls"""
+    #     # Progress label
+    #     self.progress_label = QLabel("Ready")
+    #     self.progress_label.setStyleSheet("color: #00ff88; font-weight: bold; font-size: 11px;")
+    #     self.progress_label.setWordWrap(True)
+    #     self.progress_label.setFixedHeight(30)
+    #     layout.addWidget(self.progress_label)
+        
+    #     # Progress bar
+    #     self.progress_bar = QProgressBar()
+    #     self.progress_bar.setFixedHeight(20)
+    #     self.progress_bar.setStyleSheet("""
+    #         QProgressBar {
+    #             border: 1px solid #444;
+    #             border-radius: 4px;
+    #             background-color: #2d2d2d;
+    #             color: white;
+    #             text-align: center;
+    #             font-size: 10px;
+    #         }
+    #         QProgressBar::chunk {
+    #             background-color: #00ff88;
+    #             border-radius: 3px;
+    #         }
+    #     """)
+    #     self.progress_bar.setVisible(False)
+    #     layout.addWidget(self.progress_bar)
+
+    #     # Queue control buttons
+    #     queue_layout = QHBoxLayout()
+    #     self.pause_button = QPushButton("⏸ PAUSE")
+    #     self.pause_button.setVisible(False)
+    #     self.pause_button.clicked.connect(self.pause_processing)
+    #     queue_layout.addWidget(self.pause_button)
+        
+    #     self.resume_button = QPushButton("▶ RESUME")
+    #     self.resume_button.setVisible(False)
+    #     self.resume_button.clicked.connect(self.resume_processing)
+    #     queue_layout.addWidget(self.resume_button)
+        
+    #     queue_widget = QWidget()
+    #     queue_widget.setLayout(queue_layout)
+    #     layout.addWidget(queue_widget)
 
     def create_center_panel(self):
         """Center panel: Track table and folder monitoring"""
@@ -633,34 +715,29 @@ class MainWindow(QMainWindow):
     def cancel_processing(self):
         """Cancel all processing"""
         self.bg_processor.stop_processing()
-        self.progress_label.setText("Cancelling all tracks...")
-        self.pause_button.setVisible(False)
-        self.resume_button.setVisible(False)
+        self.progress_label.setText("Cancelling...")
 
     def on_all_completed(self, processed, total):
         """Handle all processing completed"""
-        self.progress_label.setText(f"🎉 Complete! Processed {processed}/{total} tracks")
+        self.progress_label.setText(f"Complete! {processed}/{total}")
         self.progress_bar.setVisible(False)
-        self.pause_button.setVisible(False)
-        self.resume_button.setVisible(False)
         
         # Reset button
-        self.process_button.setText("🔥 PROCESS TRACKS")
+        self.process_button.setText("PROCESS TRACKS")
         self.process_button.clicked.disconnect()
         self.process_button.clicked.connect(self.process_tracks)
-
 
     def on_track_started(self, index, name):
         """Handle track processing started"""
         self.track_table.update_track_status(index, 'processing')
-        short_name = name[:25] + "..." if len(name) > 25 else name
+        short_name = name[:20] + "..." if len(name) > 20 else name
         
-        # Count currently processing tracks
         processing_count = sum(1 for i in range(self.track_table.rowCount()) 
                             if self.track_table.item(i, 8) and 
                             'Processing' in self.track_table.item(i, 8).text())
         
-        self.progress_label.setText(f"⚡ Processing {processing_count} tracks: {short_name}")
+        self.progress_label.setText(f"⚡ {processing_count} tracks\n{short_name}")
+
 
 
     def on_track_completed(self, index, success, message, after_lufs=0.0, final_peak=0.0):
@@ -684,16 +761,12 @@ class MainWindow(QMainWindow):
     def pause_processing(self):
         """Pause the processing queue"""
         self.bg_processor.pause_processing()
-        self.pause_button.setVisible(False)
-        self.resume_button.setVisible(True)
-        self.progress_label.setText("⏸ Processing paused...")
+        self.progress_label.setText("Paused...")
 
     def resume_processing(self):
         """Resume the processing queue"""
         self.bg_processor.resume_processing()
-        self.pause_button.setVisible(True)
-        self.resume_button.setVisible(False)
-        self.progress_label.setText("▶ Processing resumed...")
+        self.progress_label.setText("Resumed...")
 
     def skip_track(self, track_index):
         """Skip individual track"""
@@ -1039,38 +1112,115 @@ class MainWindow(QMainWindow):
 
     
     def setup_dark_theme(self):
-        """Apply professional dark DJ theme"""
+        """Apply clean dark theme"""
         self.setStyleSheet("""
             QMainWindow { background-color: #1a1a1a; color: white; }
             QWidget { background-color: #1a1a1a; color: white; }
             QFrame { background-color: #2d2d2d; border: 1px solid #444; border-radius: 8px; margin: 5px; }
+            
+            QLabel { 
+                color: white; 
+                font-size: 12px;
+                background: transparent;
+                border: none;
+            }
+            
             QPushButton {
-                background-color: #2d2d2d; border: 1px solid #444; border-radius: 6px;
-                padding: 8px 16px; color: white; font-weight: bold;
+                background-color: #3d3d3d; 
+                border: 1px solid #555; 
+                border-radius: 4px;
+                padding: 6px 12px; 
+                color: white; 
+                font-size: 12px;
             }
-            QPushButton:hover { background-color: #3d3d3d; border-color: #00ff88; }
-            QPushButton:pressed { background-color: #00ff88; color: black; }
+            QPushButton:hover { 
+                background-color: #4d4d4d; 
+                border-color: #00ff88; 
+            }
+            
             QComboBox {
-                background-color: #2d2d2d; border: 1px solid #444; border-radius: 4px;
-                padding: 5px; color: white;
+                background-color: #3d3d3d; 
+                border: 1px solid #555; 
+                border-radius: 4px;
+                padding: 6px; 
+                color: white;
+                font-size: 12px;
             }
-            QComboBox::drop-down { border: none; }
-            QComboBox::down-arrow { image: none; border: none; }
+            QComboBox:hover {
+                border-color: #00ff88;
+            }
+            QComboBox::drop-down { 
+                border: none; 
+            }
+            QComboBox::down-arrow { 
+                width: 0; height: 0;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid white;
+            }
+            
+            QLineEdit {
+                background-color: #3d3d3d;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 6px;
+                color: white;
+                font-size: 11px;
+            }
+            
+            QProgressBar {
+                border: 1px solid #444;
+                border-radius: 4px;
+                background-color: #2d2d2d;
+                color: white;
+                text-align: center;
+                font-size: 10px;
+            }
+            QProgressBar::chunk {
+                background-color: #00ff88;
+                border-radius: 3px;
+            }
+            
             QTableWidget {
-                background-color: #2d2d2d; border: 1px solid #444; border-radius: 6px;
+                background-color: #2d2d2d; 
+                border: 1px solid #444; 
+                border-radius: 6px;
                 gridline-color: #444;
             }
             QTableWidget::item { 
                 padding: 8px; 
                 border-bottom: 1px solid #333; 
             }
-            QTableWidget::item:selected { background-color: #00ff88; color: black; }
-            QHeaderView::section {
-                background-color: #333; color: white; padding: 8px;
-                border: none; font-weight: bold;
+            QTableWidget::item:selected { 
+                background-color: #00ff88; 
+                color: black; 
             }
-            QLabel { color: white; }
+            QHeaderView::section {
+                background-color: #333; 
+                color: white; 
+                padding: 8px;
+                border: none; 
+                font-weight: bold;
+            }
+            
+            QScrollArea { 
+                border: none; 
+                background-color: transparent; 
+            }
+            QScrollBar:vertical {
+                background-color: #2d2d2d;
+                width: 10px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #555;
+                border-radius: 5px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #00ff88;
+            }
         """)
+
+
 
     def closeEvent(self, event):
         """Clean up when closing the app"""
