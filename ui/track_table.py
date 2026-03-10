@@ -1,6 +1,8 @@
 from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView, QMenu
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
+from .waveform_dialog import WaveformDialog
+import os
 
 class TrackTable(QTableWidget):
     skip_track_requested = Signal(int)
@@ -41,6 +43,10 @@ class TrackTable(QTableWidget):
         row = item.row()
         status_item = self.item(row, 8)
         
+        # Get track path from row data
+        name_item = self.item(row, 0)
+        track_path = name_item.data(Qt.UserRole) if name_item else None
+                
         menu = QMenu(self)
         menu.setStyleSheet("""
             QMenu {
@@ -48,6 +54,10 @@ class TrackTable(QTableWidget):
                 color: white;
                 border: 1px solid #444;
                 border-radius: 4px;
+                padding: 5px;
+            }
+            QMenu::item {
+                padding: 8px 20px;
             }
             QMenu::item:selected {
                 background-color: #00ff88;
@@ -55,30 +65,71 @@ class TrackTable(QTableWidget):
             }
         """)
         
+        # View Waveform action (always show if we have path)
+        waveform_action = None
+        if track_path:
+            waveform_action = menu.addAction("📊 View Waveform")
+            menu.addSeparator()
+        
+        # Skip action
+        skip_action = None
         if status_item and ("READY" in status_item.text() or "PROCESSING" in status_item.text()):
             skip_action = menu.addAction("🚫 Skip This Track")
-        else:
-            skip_action = None
         
-        remove_action = menu.addAction("🗑️ Remove Track")
+        # Remove action (always available)
+        remove_action = menu.addAction("🗑 Remove Track")
         
+        # Execute menu
         action = menu.exec(self.mapToGlobal(position))
         
-        if action == skip_action and skip_action:
-            self.skip_track_requested.emit(row)
-        elif action == remove_action:
-            self.remove_track_requested.emit(row)
+        # Handle action (check if action is not None before comparing)
+        if action is not None:
+            if waveform_action is not None and action == waveform_action:
+                self.view_waveform(track_path)
+            elif skip_action is not None and action == skip_action:
+                self.skip_track_requested.emit(row)
+            elif action == remove_action:
+                self.remove_track_requested.emit(row)
+
+
+    def view_waveform(self, track_path):
+        """Open waveform dialog with before/after if processed"""
+        # Get the row to check for processed path
+        for row in range(self.rowCount()):
+            name_item = self.item(row, 0)
+            if name_item and name_item.data(Qt.UserRole) == track_path:
+                # Check if processed path exists
+                processed_path = name_item.data(Qt.UserRole + 1)
+                
+                # Check if processed file actually exists
+                if processed_path and os.path.exists(processed_path):
+                    dialog = WaveformDialog(track_path, processed_path, parent=self)
+                else:
+                    dialog = WaveformDialog(track_path, parent=self)
+                
+                dialog.exec()
+                return
+        
+        # Fallback if row not found
+        dialog = WaveformDialog(track_path, parent=self)
+        dialog.exec()
+
+
+
 
     def add_track(self, track_data, target_lufs=None):
         """Add track with professional formatting and optimization detection"""
         row = self.rowCount()
         self.insertRow(row)
         
-        # Track name
+        # Track name (store path in item data)
         name = track_data['name']
         if len(name) > 40:
             name = name[:37] + "..."
-        self.setItem(row, 0, self._create_item(name))
+        name_item = self._create_item(name)
+        name_item.setData(Qt.UserRole, track_data.get('path'))  # Store path
+        self.setItem(row, 0, name_item)
+
         
         # Duration
         duration = track_data.get('duration', 0)

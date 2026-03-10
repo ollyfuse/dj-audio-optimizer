@@ -275,7 +275,10 @@ class MainWindow(QMainWindow):
         """Center panel: Track table and folder monitoring"""
         panel = QFrame()
         panel.setFrameStyle(QFrame.StyledPanel)
+        panel.setContentsMargins(0, 0, 0, 0)  
         layout = QVBoxLayout(panel)
+        layout.setContentsMargins(5, 5, 5, 5) 
+        layout.setSpacing(5)
         
         # Create tab widget
         from PySide6.QtWidgets import QTabWidget
@@ -300,6 +303,8 @@ class MainWindow(QMainWindow):
         # Track Library Tab
         library_widget = QWidget()
         library_layout = QVBoxLayout(library_widget)
+        library_layout.setContentsMargins(5, 5, 5, 5)  
+        library_layout.setSpacing(5) 
         
         # Drag & drop area
         drop_area = DragDropWidget("📁 Drag & Drop Audio Files Here\n\nOr click 'Add Tracks' below")
@@ -322,8 +327,9 @@ class MainWindow(QMainWindow):
         self.track_table = TrackTable()
         self.track_table.skip_track_requested.connect(self.skip_track)
         self.track_table.remove_track_requested.connect(self.remove_track)
+        self.track_table.setContentsMargins(0, 0, 0, 0)  
         library_layout.addWidget(self.track_table)
-        
+
         # Folder Watch Tab
         self.folder_watch_panel = FolderWatchPanel(self.preset_manager, self.watch_config)
         self.folder_watch_panel.watch_added.connect(self.on_watch_added)
@@ -746,12 +752,28 @@ class MainWindow(QMainWindow):
             self.track_table.update_track_status(index, 'completed')
             # Update the table with before/after comparison data
             self.track_table.update_after_processing(index, after_lufs, final_peak)
+            
+            # Store processed file path in track data
+            if index < len(self.tracks):
+                track = self.tracks[index]
+                # Generate processed file path
+                original_name = track['name']
+                output_format = self.get_output_format()
+                processed_name = self.get_output_filename(original_name, output_format)
+                processed_path = os.path.join(self.output_folder, processed_name)
+                
+                # Store it in track data
+                track['processed_path'] = processed_path
+                
+                # Also store in table item
+                name_item = self.track_table.item(index, 0)
+                if name_item:
+                    name_item.setData(Qt.UserRole + 1, processed_path)
+        
         elif "Skipped by user" in message:
-            # Don't change status - it's already set to 'skipped' by skip_track method
             pass
         else:
             self.track_table.update_track_status(index, 'error')
-
 
 
     def on_progress_updated(self, current, total):
@@ -875,7 +897,9 @@ class MainWindow(QMainWindow):
         self.track_table.insertRow(row_index)
         
         # Add placeholder cells
-        self.track_table.setItem(row_index, 0, self.track_table._create_item(filename))
+        name_item = self.track_table._create_item(filename)
+        name_item.setData(Qt.UserRole, file_path)  # Store path immediately
+        self.track_table.setItem(row_index, 0, name_item)
         self.track_table.setItem(row_index, 1, self.track_table._create_item("...", center=True))
         self.track_table.setItem(row_index, 2, self.track_table._create_item("...", center=True))
         self.track_table.setItem(row_index, 3, self.track_table._create_item("--", center=True))  # Show -- before processing
