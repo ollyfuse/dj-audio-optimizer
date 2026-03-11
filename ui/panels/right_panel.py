@@ -58,7 +58,7 @@ class RightPanel(QFrame):
         layout.addStretch()
         
         # Copyright section
-        copyright_label = QLabel("© 2026 DJ-FUSE\nProfessional DJ Audio Optimizer")
+        copyright_label = QLabel("© 2026 DJ-FUSE\nProfessional DJ Audio Optimizer\nv2.0")
         copyright_label.setStyleSheet('''
             color: #666; 
             font-size: 10px; 
