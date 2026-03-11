@@ -1,18 +1,13 @@
 from core.watch_config import WatchConfig
 from core.folder_watcher import FolderWatcher
-from .folder_watch_panel import FolderWatchPanel
+from .panels import LeftPanel, CenterPanel, RightPanel
 from .preset_manager_dialog import PresetManagerDialog
-from PySide6.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, 
-                               QPushButton, QLabel, QFileDialog, QComboBox, QFrame, QProgressBar, QApplication, QLineEdit)
-
-from PySide6.QtCore import Qt
-from .track_table import TrackTable
-from .drag_drop_widget import DragDropWidget
+from PySide6.QtWidgets import QMainWindow, QHBoxLayout, QWidget, QFileDialog
+from PySide6.QtCore import Qt, QThread
+from PySide6.QtGui import QColor
 from core.analyzer import AudioAnalyzer
 from core.presets import PresetManager
 from core.processor import AudioProcessor
-from core.background_processor import BackgroundProcessor
-import multiprocessing
 import os
 
 
@@ -23,669 +18,135 @@ class MainWindow(QMainWindow):
         self.preset_manager = PresetManager()
         self.processor = AudioProcessor()
         self.tracks = []
-        self.output_folder = os.path.expanduser("~/Desktop")  
+        self.output_folder = os.path.expanduser("~/Desktop")
 
-        # Initialize folder watching BEFORE setup_ui
+        # Initialize folder watching
         self.watch_config = WatchConfig()
         self.folder_watcher = FolderWatcher()
 
         self.setup_ui()
         self.setup_dark_theme()
-        # Parallel processor 
+        
+        # Parallel processor
         from core.parallel_processor import ParallelProcessor
         self.parallel_processor = ParallelProcessor()
         self.parallel_processor.track_started.connect(self.on_track_started)
         self.parallel_processor.track_completed.connect(self.on_track_completed)
         self.parallel_processor.progress_updated.connect(self.on_progress_updated)
         self.parallel_processor.all_completed.connect(self.on_all_completed)
-
-        # Keep old processor for compatibility
         self.bg_processor = self.parallel_processor
 
         # Folder watching system
         self.setup_folder_watching()
 
-            
     def setup_ui(self):
         self.setWindowTitle("DeckReady - Professional DJ Audio Optimizer")
         self.setGeometry(100, 100, 1200, 800)
         
-        # Main widget and layout
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout(central_widget)
         
-        # LEFT PANEL
-        left_panel = self.create_left_panel()
-        main_layout.addWidget(left_panel, 1)
+        # Create panels
+        self.left_panel = LeftPanel(self.preset_manager, self.output_folder)
+        self.center_panel = CenterPanel(self.preset_manager, self.watch_config)
+        self.right_panel = RightPanel(self.preset_manager)
         
-        # CENTER PANEL
-        center_panel = self.create_center_panel()
-        main_layout.addWidget(center_panel, 3)
+        # Connect signals
+        self.connect_panel_signals()
         
-        # RIGHT PANEL
-        right_panel = self.create_right_panel()
-        main_layout.addWidget(right_panel, 1)
+        # Add panels to layout
+        main_layout.addWidget(self.left_panel, 1)
+        main_layout.addWidget(self.center_panel, 3)
+        main_layout.addWidget(self.right_panel, 1)
+        
+        # Update initial displays
+        self.on_preset_changed(self.left_panel.get_selected_preset_key())
     
-    def create_left_panel(self):
-        """Left panel: Clean and minimal design"""
-        panel = QFrame()
-        panel.setFrameStyle(QFrame.StyledPanel)
-        panel.setMinimumWidth(260)
-        panel.setMaximumWidth(300)
+    def connect_panel_signals(self):
+        """Connect all panel signals to handlers"""
+        # Left panel
+        self.left_panel.preset_changed.connect(self.on_preset_changed)
+        self.left_panel.output_folder_changed.connect(self.on_output_folder_changed)
+        self.left_panel.process_clicked.connect(self.process_tracks)
+        self.left_panel.cancel_clicked.connect(self.cancel_processing)
+        self.left_panel.preset_manager_requested.connect(self.open_preset_manager)
         
-        # Scrollable content
-        from PySide6.QtWidgets import QScrollArea
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setSpacing(12)
-        layout.setContentsMargins(15, 15, 15, 15)
-        
-        # Logo
-        logo = QLabel("DECKREADY")
-        logo.setStyleSheet("font-size: 18px; font-weight: bold; color: #00ff88;")
-        logo.setAlignment(Qt.AlignCenter)
-        layout.addWidget(logo)
-        
-        # Preset
-        layout.addWidget(QLabel("Preset"))
-        preset_row = QHBoxLayout()
-        preset_row.setSpacing(5)
-        self.preset_combo = QComboBox()
-        self.preset_combo.setMinimumHeight(30)
-        self.refresh_preset_combo()
-        self.preset_combo.currentTextChanged.connect(self.on_preset_changed)
-        preset_row.addWidget(self.preset_combo, 1)
-        
-        manage_btn = QPushButton("Edit")
-        manage_btn.setFixedHeight(30)
-        manage_btn.setFixedWidth(50)
-        manage_btn.clicked.connect(self.open_preset_manager)
-        preset_row.addWidget(manage_btn)
-        layout.addLayout(preset_row)
-        
-        # Output Format
-        layout.addWidget(QLabel("Output Format"))
-        self.format_combo = QComboBox()
-        self.format_combo.setMinimumHeight(30)
-        self.format_combo.addItems(["WAV 24-bit", "WAV 16-bit", "AIFF", "FLAC"])
-        layout.addWidget(self.format_combo)
-        
-        # Spacing
-        layout.addSpacing(10)
-        
-        # Output Folder
-        layout.addWidget(QLabel("Output Folder"))
-        folder_row = QHBoxLayout()
-        folder_row.setSpacing(5)
-        self.folder_display = QLineEdit()
-        self.folder_display.setText(self.output_folder)
-        self.folder_display.setReadOnly(True)
-        self.folder_display.setMinimumHeight(30)
-        folder_row.addWidget(self.folder_display, 1)
-        
-        browse_btn = QPushButton("Browse")
-        browse_btn.setFixedHeight(30)
-        browse_btn.setFixedWidth(70)
-        browse_btn.clicked.connect(self.browse_output_folder)
-        folder_row.addWidget(browse_btn)
-        layout.addLayout(folder_row)
-        
-        # Naming
-        layout.addWidget(QLabel("Naming"))
-        self.naming_combo = QComboBox()
-        self.naming_combo.setMinimumHeight(30)
-        self.naming_combo.addItems([
-            "Original - DJ OPT",
-            "DJ OPT - Original", 
-            "Original (Optimized)",
-            "Original_DJ_OPT"
-        ])
-        layout.addWidget(self.naming_combo)
-        
-        # CPU Cores
-        layout.addWidget(QLabel("CPU Cores"))
-        self.cores_combo = QComboBox()
-        self.cores_combo.setMinimumHeight(30)
-        cpu_count = multiprocessing.cpu_count()
-        self.cores_combo.addItem(f"Auto ({cpu_count-1})", cpu_count-1)
-        for i in range(1, cpu_count + 1):
-            self.cores_combo.addItem(f"{i} core{'s' if i > 1 else ''}", i)
-        layout.addWidget(self.cores_combo)
-        
-        # Spacing
-        layout.addSpacing(10)
-        
-        # Progress
-        self.progress_label = QLabel("Ready")
-        self.progress_label.setStyleSheet("color: #00ff88; font-size: 11px;")
-        self.progress_label.setWordWrap(True)
-        layout.addWidget(self.progress_label)
-        
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setFixedHeight(18)
-        self.progress_bar.setVisible(False)
-        layout.addWidget(self.progress_bar)
-        
-        layout.addStretch()
-        
-        # Process Button
-        self.process_button = QPushButton("PROCESS TRACKS")
-        self.process_button.setMinimumHeight(45)
-        self.process_button.setStyleSheet("""
-            QPushButton {
-                background-color: #00ff88;
-                color: black;
-                font-weight: bold;
-                font-size: 13px;
-                border: none;
-                border-radius: 6px;
-            }
-            QPushButton:hover {
-                background-color: #00dd77;
-            }
-        """)
-        self.process_button.clicked.connect(self.process_tracks)
-        layout.addWidget(self.process_button)
-        
-        scroll.setWidget(content)
-        panel_layout = QVBoxLayout(panel)
-        panel_layout.setContentsMargins(0, 0, 0, 0)
-        panel_layout.addWidget(scroll)
-        
-        return panel
+        # Center panel
+        self.center_panel.files_dropped.connect(self.handle_dropped_files)
+        self.center_panel.add_tracks_clicked.connect(self.add_tracks)
+        self.center_panel.clear_tracks_clicked.connect(self.clear_tracks)
+        self.center_panel.skip_track_requested.connect(self.skip_track)
+        self.center_panel.remove_track_requested.connect(self.remove_track)
+        self.center_panel.watch_added.connect(self.on_watch_added)
+        self.center_panel.watch_removed.connect(self.on_watch_removed)
+        self.center_panel.watch_toggled.connect(self.on_watch_toggled)
     
-    def refresh_preset_combo(self):
-        """Refresh preset dropdown with all presets"""
-        current_selection = self.preset_combo.currentData()
-        self.preset_combo.clear()
-        
-        presets = self.preset_manager.get_all_presets()
-        for key, preset in presets.items():
-            self.preset_combo.addItem(preset['label'], key)
-        
-        # Restore selection if still exists
-        if current_selection:
-            index = self.preset_combo.findData(current_selection)
-            if index >= 0:
-                self.preset_combo.setCurrentIndex(index)
-
+    def on_preset_changed(self, preset_key):
+        """Handle preset change"""
+        self.right_panel.update_preset_info(preset_key)
+        if preset_key:
+            preset = self.preset_manager.get_preset(preset_key)
+            self.center_panel.track_table.update_target_lufs(preset['target_lufs'])
+    
+    def on_output_folder_changed(self, folder_path):
+        """Handle output folder change"""
+        self.output_folder = folder_path
+    
     def open_preset_manager(self):
         """Open preset manager dialog"""
         dialog = PresetManagerDialog(self.preset_manager, self)
         if dialog.exec():
-            # Refresh preset combo after changes
-            self.preset_manager.load_presets()  # Reload from disk
-            self.refresh_preset_combo()
-            self.update_preset_info()
-
-
-
-    # def create_progress_section(self, layout):
-    #     """Add progress bar section with queue controls"""
-    #     # Progress label
-    #     self.progress_label = QLabel("Ready")
-    #     self.progress_label.setStyleSheet("color: #00ff88; font-weight: bold; font-size: 11px;")
-    #     self.progress_label.setWordWrap(True)
-    #     self.progress_label.setFixedHeight(30)
-    #     layout.addWidget(self.progress_label)
-        
-    #     # Progress bar
-    #     self.progress_bar = QProgressBar()
-    #     self.progress_bar.setFixedHeight(20)
-    #     self.progress_bar.setStyleSheet("""
-    #         QProgressBar {
-    #             border: 1px solid #444;
-    #             border-radius: 4px;
-    #             background-color: #2d2d2d;
-    #             color: white;
-    #             text-align: center;
-    #             font-size: 10px;
-    #         }
-    #         QProgressBar::chunk {
-    #             background-color: #00ff88;
-    #             border-radius: 3px;
-    #         }
-    #     """)
-    #     self.progress_bar.setVisible(False)
-    #     layout.addWidget(self.progress_bar)
-
-    #     # Queue control buttons
-    #     queue_layout = QHBoxLayout()
-    #     self.pause_button = QPushButton("⏸ PAUSE")
-    #     self.pause_button.setVisible(False)
-    #     self.pause_button.clicked.connect(self.pause_processing)
-    #     queue_layout.addWidget(self.pause_button)
-        
-    #     self.resume_button = QPushButton("▶ RESUME")
-    #     self.resume_button.setVisible(False)
-    #     self.resume_button.clicked.connect(self.resume_processing)
-    #     queue_layout.addWidget(self.resume_button)
-        
-    #     queue_widget = QWidget()
-    #     queue_widget.setLayout(queue_layout)
-    #     layout.addWidget(queue_widget)
-
-    def create_center_panel(self):
-        """Center panel: Track table and folder monitoring"""
-        panel = QFrame()
-        panel.setFrameStyle(QFrame.StyledPanel)
-        panel.setContentsMargins(0, 0, 0, 0)  
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(5, 5, 5, 5) 
-        layout.setSpacing(5)
-        
-        # Create tab widget
-        from PySide6.QtWidgets import QTabWidget
-        tabs = QTabWidget()
-        tabs.setStyleSheet("""
-            QTabWidget::pane {
-                border: 1px solid #444;
-                background-color: #2d2d2d;
-            }
-            QTabBar::tab {
-                background-color: #2d2d2d;
-                color: white;
-                padding: 8px 16px;
-                border: 1px solid #444;
-            }
-            QTabBar::tab:selected {
-                background-color: #00ff88;
-                color: black;
-            }
-        """)
-        
-        # Track Library Tab
-        library_widget = QWidget()
-        library_layout = QVBoxLayout(library_widget)
-        library_layout.setContentsMargins(5, 5, 5, 5)  
-        library_layout.setSpacing(5) 
-        
-        # Drag & drop area
-        drop_area = DragDropWidget("📁 Drag & Drop Audio Files Here\n\nOr click 'Add Tracks' below")
-        drop_area.files_dropped.connect(self.handle_dropped_files)
-        library_layout.addWidget(drop_area)
-        
-        # Button layout
-        button_layout = QHBoxLayout()
-        add_button = QPushButton("+ Add Tracks")
-        add_button.clicked.connect(self.add_tracks)
-        button_layout.addWidget(add_button)
-
-        clear_button = QPushButton("🗑 Clear All")
-        clear_button.clicked.connect(self.clear_tracks)
-        button_layout.addWidget(clear_button)
-
-        library_layout.addLayout(button_layout)
-        
-        # Track table
-        self.track_table = TrackTable()
-        self.track_table.skip_track_requested.connect(self.skip_track)
-        self.track_table.remove_track_requested.connect(self.remove_track)
-        self.track_table.setContentsMargins(0, 0, 0, 0)  
-        library_layout.addWidget(self.track_table)
-
-        # Folder Watch Tab
-        self.folder_watch_panel = FolderWatchPanel(self.preset_manager, self.watch_config)
-        self.folder_watch_panel.watch_added.connect(self.on_watch_added)
-        self.folder_watch_panel.watch_removed.connect(self.on_watch_removed)
-        self.folder_watch_panel.watch_toggled.connect(self.on_watch_toggled)
-        
-        # Add tabs
-        tabs.addTab(library_widget, "📚 Track Library")
-        tabs.addTab(self.folder_watch_panel, "📁 Folder Monitoring")
-        
-        layout.addWidget(tabs)
-        
-        return panel
-    
-    def on_watch_added(self, path, config):
-        """Handle watch folder added"""
-        self.folder_watcher.add_watch(path, config)
-
-    def on_watch_removed(self, path):
-        """Handle watch folder removed"""
-        self.folder_watcher.remove_watch(path)
-
-    def on_watch_toggled(self, path, enabled):
-        """Handle watch folder toggled"""
-        if enabled:
-            # Find config and re-add watch
-            for config in self.watch_config.watched_folders:
-                if config['path'] == path:
-                    self.folder_watcher.add_watch(path, config)
-                    break
-        else:
-            self.folder_watcher.remove_watch(path)
-
-
-
-    def clear_tracks(self):
-        """Clear all tracks from the table"""
-        self.tracks.clear()
-        self.track_table.setRowCount(0)
-        self.progress_label.setText("Ready to process")
-        self.progress_bar.setVisible(False)
-        self.update_health_display()
-
-    def update_health_display(self):
-        """Update compact health display in right panel"""
-        if not self.tracks:
-            self.health_score_label.setText("--")
-            self.health_breakdown.setText("<i>No tracks loaded</i>")
-            return
-        
-        # Calculate overall health
-        total_tracks = len(self.tracks)
-        total_score = sum(t.get('health_score', 0) for t in self.tracks)
-        avg_score = int(total_score / total_tracks) if total_tracks > 0 else 0
-        
-        # Update score with color
-        score_color = self._get_health_color(avg_score)
-        self.health_score_label.setText(str(avg_score))
-        self.health_score_label.setStyleSheet(f"""
-            font-size: 36px; 
-            font-weight: bold; 
-            color: {score_color};
-            padding: 10px;
-        """)
-        
-        # Count by status
-        excellent = sum(1 for t in self.tracks if t.get('health_score', 0) >= 80)
-        good = sum(1 for t in self.tracks if 60 <= t.get('health_score', 0) < 80)
-        fair = sum(1 for t in self.tracks if 40 <= t.get('health_score', 0) < 60)
-        poor = sum(1 for t in self.tracks if t.get('health_score', 0) < 40)
-        
-        # Count issues
-        from collections import Counter
-        all_issues = []
-        for track in self.tracks:
-            all_issues.extend(track.get('health_issues', []))
-        
-        issue_counts = Counter(all_issues)
-        clipping = issue_counts.get('clipping', 0) + issue_counts.get('near_clipping', 0)
-        quiet = issue_counts.get('too_quiet', 0)
-        compressed = issue_counts.get('over_compressed', 0)
-        
-        # Build compact breakdown text
-        breakdown_text = f"""
-    <b>{total_tracks} tracks loaded</b><br><br>
-
-    <span style='color: #00aa44;'>🟢 {excellent} Excellent</span><br>
-    <span style='color: #88aa00;'>🟡 {good} Good</span><br>
-    <span style='color: #ffaa00;'>🟠 {fair} Fair</span><br>
-    <span style='color: #aa4444;'>🔴 {poor} Poor</span><br><br>
-
-    <b>Issues:</b><br>
-    <span style='color: #ff4444;'>⚠️ {clipping} Clipping</span><br>
-    <span style='color: #ffaa00;'>🔇 {quiet} Too Quiet</span><br>
-    <span style='color: #ffaa00;'>📉 {compressed} Compressed</span>
-        """
-        
-        self.health_breakdown.setText(breakdown_text)
-
-    def _get_health_color(self, score):
-        """Get color for health score"""
-        if score >= 80:
-            return "#00aa44"
-        elif score >= 60:
-            return "#88aa00"
-        elif score >= 40:
-            return "#ffaa00"
-        else:
-            return "#aa4444"
-        
-    def _is_processed_file(self, filename):
-        """Check if filename indicates it's already been processed"""
-        processed_patterns = [
-            '- DJ OPT',
-            'DJ OPT -',
-            '(Optimized)',
-            '_DJ_OPT'
-        ]
-        return any(pattern in filename for pattern in processed_patterns)
-    
-    def handle_dropped_files(self, file_paths):
-        """Handle files dropped onto the drag & drop area"""
-        # Get current target LUFS
-        current_preset_key = self.preset_combo.currentData()
-        target_lufs = None
-        if current_preset_key:
-            preset = self.preset_manager.get_preset(current_preset_key)
-            target_lufs = preset['target_lufs']
-        
-        # Add all files asynchronously (NON-BLOCKING!)
-        for file_path in file_paths:
-            self._add_track_async(file_path, target_lufs)
-
-
-    
-    def create_right_panel(self):
-        """Right panel: Preset summary, Health dashboard, and info"""
-        panel = QFrame()
-        panel.setFrameStyle(QFrame.StyledPanel)
-        layout = QVBoxLayout(panel)
-        
-        # Preset summary title
-        title = QLabel("📊 PRESET SUMMARY")
-        title.setStyleSheet("font-weight: bold; color: #00ff88; font-size: 14px;")
-        layout.addWidget(title)
-        
-        # Preset info
-        self.preset_info = QLabel()
-        self.preset_info.setStyleSheet("color: white; padding: 10px;")
-        self.preset_info.setWordWrap(True)
-        layout.addWidget(self.preset_info)
-        
-        # Divider
-        divider = QFrame()
-        divider.setFrameShape(QFrame.HLine)
-        divider.setStyleSheet("background-color: #444; margin: 10px 0;")
-        layout.addWidget(divider)
-        
-        # Health Dashboard (NEW - COMPACT VERSION!)
-        health_title = QLabel("💊 LIBRARY HEALTH")
-        health_title.setStyleSheet("font-weight: bold; color: #00ff88; font-size: 14px;")
-        layout.addWidget(health_title)
-        
-        # Health score (big number)
-        self.health_score_label = QLabel("--")
-        self.health_score_label.setStyleSheet("""
-            font-size: 36px; 
-            font-weight: bold; 
-            color: #00ff88;
-            padding: 10px;
-        """)
-        self.health_score_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.health_score_label)
-        
-        # Health breakdown
-        self.health_breakdown = QLabel()
-        self.health_breakdown.setStyleSheet("color: white; padding: 5px; font-size: 11px;")
-        self.health_breakdown.setWordWrap(True)
-        layout.addWidget(self.health_breakdown)
-        
-        layout.addStretch()
-        
-        # Update preset info
-        self.update_preset_info()
-        self.update_health_display()
-
-        # Copyright section
-        copyright_label = QLabel("© 2026 DJ-FUSE\nProfessional DJ Audio Optimizer")
-        copyright_label.setStyleSheet('''
-            color: #666; 
-            font-size: 10px; 
-            padding: 10px;
-            text-align: center;
-        ''')
-        copyright_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(copyright_label)
-        
-        return panel
-
-    
-    def on_preset_changed(self):
-        """Update preset info when preset changes"""
-        self.update_preset_info()
-        # Update target LUFS in table
-        current_preset_key = self.preset_combo.currentData()
-        if current_preset_key:
-            preset = self.preset_manager.get_preset(current_preset_key)
-            self.track_table.update_target_lufs(preset['target_lufs'])
-    
-    def update_preset_info(self):
-        """Update the preset summary panel"""
-        current_preset_key = self.preset_combo.currentData()
-        if current_preset_key:
-            preset = self.preset_manager.get_preset(current_preset_key)
-            info_text = f"""
-<b>{preset['label']}</b><br>
-<i>{preset['description']}</i><br><br>
-
-<b>Target LUFS:</b> {preset['target_lufs']}<br>
-<b>True Peak Limit:</b> {preset['true_peak']} dB<br>
-<b>High-pass Filter:</b> {preset['highpass_hz']} Hz<br>
-<b>Output Format:</b> {preset['output_format'].upper()}<br><br>
-
-<b>EQ Settings:</b><br>
-• Low: {preset['eq']['low_cut_db']} dB<br>
-• Mid: {preset['eq']['mid_cut_db']} dB<br>
-• High: {preset['eq']['high_boost_db']} dB
-            """
-            self.preset_info.setText(info_text)
+            self.preset_manager.load_presets()
+            self.left_panel.refresh_presets()
+            self.on_preset_changed(self.left_panel.get_selected_preset_key())
     
     def add_tracks(self):
+        """Add tracks via file dialog"""
         files, _ = QFileDialog.getOpenFileNames(
             self, "Select Audio Files", "", 
             "Audio Files (*.mp3 *.wav *.flac *.aiff)"
         )
         
-        # Get current target LUFS
-        current_preset_key = self.preset_combo.currentData()
+        current_preset_key = self.left_panel.get_selected_preset_key()
         target_lufs = None
         if current_preset_key:
             preset = self.preset_manager.get_preset(current_preset_key)
             target_lufs = preset['target_lufs']
         
-        # Add all files asynchronously (NON-BLOCKING!)
         for file_path in files:
             self._add_track_async(file_path, target_lufs)
-
     
-    def get_output_format(self):
-        """Get the selected output format"""
-        format_map = {
-            "WAV 24-bit": "wav_24",
-            "WAV 16-bit": "wav_16", 
-            "AIFF": "aiff",
-            "FLAC": "flac"
-        }
-        return format_map.get(self.format_combo.currentText(), "wav_24")
+    def handle_dropped_files(self, file_paths):
+        """Handle files dropped onto drag & drop area"""
+        current_preset_key = self.left_panel.get_selected_preset_key()
+        target_lufs = None
+        if current_preset_key:
+            preset = self.preset_manager.get_preset(current_preset_key)
+            target_lufs = preset['target_lufs']
+        
+        for file_path in file_paths:
+            self._add_track_async(file_path, target_lufs)
     
-    def browse_output_folder(self):
-        """Browse for output folder"""
-        folder = QFileDialog.getExistingDirectory(self, "Select Output Folder", self.output_folder)
-        if folder:
-            self.output_folder = folder
-            self.folder_display.setText(folder)
-
-    def get_output_filename(self, original_name, output_format):
-        """Generate output filename based on naming convention"""
-        # Clean the filename first
-        clean_name = self.clean_filename(original_name)
-        
-        # Get file extension based on format
-        if output_format == "aiff":
-            ext = ".aiff"
-        elif output_format == "flac":
-            ext = ".flac"
-        else:
-            ext = ".wav"
-        
-        # Apply naming convention
-        naming = self.naming_combo.currentText()
-        if naming == "Original - DJ OPT":
-            return f"{clean_name} - DJ OPT{ext}"
-        elif naming == "DJ OPT - Original":
-            return f"DJ OPT - {clean_name}{ext}"
-        elif naming == "Original (Optimized)":
-            return f"{clean_name} (Optimized){ext}"
-        elif naming == "Original_DJ_OPT":
-            return f"{clean_name}_DJ_OPT{ext}"
-        else:
-            return f"{clean_name} - DJ OPT{ext}"  # Default
-
-
-    def clean_filename(self, filename):
-        """Clean filename by removing common unwanted phrases"""
-        import re
-        
-        # Remove file extension first
-        base_name = os.path.splitext(filename)[0]
-        
-        # List of phrases to remove (case insensitive)
-        unwanted_phrases = [
-            r'\(official\s+video\)',
-            r'\(official\s+audio\)',
-            r'\(official\s+music\s+video\)',
-            r'\(music\s+video\)',
-            r'\(lyric\s+video\)',
-            r'\(lyrics\)',
-            r'\(hd\)',
-            r'\(4k\)',
-            r'\(1080p\)',
-            r'\(720p\)',
-            r'\[official\s+video\]',
-            r'\[official\s+audio\]',
-            r'\[official\s+music\s+video\]',
-            r'\[music\s+video\]',
-            r'\[lyric\s+video\]',
-            r'\[lyrics\]',
-            r'\[hd\]',
-            r'\[4k\]',
-            r'\[1080p\]',
-            r'\[720p\]',
-            r'official\s+video',
-            r'official\s+audio',
-            r'official\s+music\s+video',
-            r'music\s+video',
-            r'lyric\s+video',
-            r'lyrics'
-        ]
-        
-        # Remove unwanted phrases
-        cleaned_name = base_name
-        for phrase in unwanted_phrases:
-            cleaned_name = re.sub(phrase, '', cleaned_name, flags=re.IGNORECASE)
-        
-        # Clean up extra spaces and dashes
-        cleaned_name = re.sub(r'\s+', ' ', cleaned_name)  # Multiple spaces to single
-        cleaned_name = re.sub(r'\s*-\s*$', '', cleaned_name)  # Trailing dash
-        cleaned_name = re.sub(r'^\s*-\s*', '', cleaned_name)  # Leading dash
-        cleaned_name = cleaned_name.strip()
-        
-        return cleaned_name if cleaned_name else base_name  # Fallback to original if empty
-
-
+    def clear_tracks(self):
+        """Clear all tracks"""
+        self.tracks.clear()
+        self.center_panel.track_table.setRowCount(0)
+        self.left_panel.update_progress("Ready to process")
+        self.left_panel.hide_progress()
+        self.right_panel.update_health_display([])
     
     def process_tracks(self):
+        """Start processing tracks"""
         if not self.tracks:
             return
         
-        # Get selected core count
-        max_workers = self.cores_combo.currentData()
+        max_workers = self.left_panel.get_cpu_cores()
+        current_preset_key = self.left_panel.get_selected_preset_key()
+        output_format = self.left_panel.get_output_format()
+        naming_convention = self.left_panel.get_naming_convention()
         
-        # Setup parallel processing
-        current_preset_key = self.preset_combo.currentData()
-        output_format = self.get_output_format()
-        
-        # Create new processor with selected core count
+        # Create new processor
         from core.parallel_processor import ParallelProcessor
         self.parallel_processor = ParallelProcessor(max_workers=max_workers)
         self.parallel_processor.track_started.connect(self.on_track_started)
@@ -699,121 +160,112 @@ class MainWindow(QMainWindow):
             current_preset_key, 
             output_format, 
             self.output_folder, 
-            self.naming_combo.currentText()
+            naming_convention
         )
 
         # Update UI
-        self.progress_bar.setMaximum(len(self.tracks))
-        self.progress_bar.setValue(0)
-        self.progress_bar.setVisible(True)
-        self.progress_label.setText(f"Processing with {max_workers} cores...")
+        self.left_panel.update_progress(
+            f"Processing with {max_workers} cores...",
+            value=0,
+            maximum=len(self.tracks)
+        )
+        self.left_panel.set_processing_state(True)
         
-        # Change button to cancel
-        self.process_button.setText("⏹ CANCEL ALL")
-        self.process_button.clicked.disconnect()
-        self.process_button.clicked.connect(self.cancel_processing)
-        
-        # Start parallel processing
+        # Start processing
         self.parallel_processor.start()
-
-
 
     def cancel_processing(self):
         """Cancel all processing"""
         self.bg_processor.stop_processing()
-        self.progress_label.setText("Cancelling...")
-
-    def on_all_completed(self, processed, total):
-        """Handle all processing completed"""
-        self.progress_label.setText(f"Complete! {processed}/{total}")
-        self.progress_bar.setVisible(False)
-        
-        # Reset button
-        self.process_button.setText("PROCESS TRACKS")
-        self.process_button.clicked.disconnect()
-        self.process_button.clicked.connect(self.process_tracks)
+        self.left_panel.update_progress("Cancelling...")
 
     def on_track_started(self, index, name):
         """Handle track processing started"""
-        self.track_table.update_track_status(index, 'processing')
+        self.center_panel.track_table.update_track_status(index, 'processing')
         short_name = name[:20] + "..." if len(name) > 20 else name
         
-        processing_count = sum(1 for i in range(self.track_table.rowCount()) 
-                            if self.track_table.item(i, 8) and 
-                            'Processing' in self.track_table.item(i, 8).text())
+        processing_count = sum(1 for i in range(self.center_panel.track_table.rowCount()) 
+                            if self.center_panel.track_table.item(i, 8) and 
+                            'Processing' in self.center_panel.track_table.item(i, 8).text())
         
-        self.progress_label.setText(f"⚡ {processing_count} tracks\n{short_name}")
-
-
+        self.left_panel.update_progress(f"⚡ {processing_count} tracks\n{short_name}")
 
     def on_track_completed(self, index, success, message, after_lufs=0.0, final_peak=0.0):
-        """Handle track processing completed with enhanced analysis data"""
+        """Handle track processing completed"""
         if success:
-            self.track_table.update_track_status(index, 'completed')
-            # Update the table with before/after comparison data
-            self.track_table.update_after_processing(index, after_lufs, final_peak)
+            self.center_panel.track_table.update_track_status(index, 'completed')
+            self.center_panel.track_table.update_after_processing(index, after_lufs, final_peak)
             
-            # Store processed file path in track data
+            # Store processed file path
             if index < len(self.tracks):
                 track = self.tracks[index]
-                # Generate processed file path
                 original_name = track['name']
-                output_format = self.get_output_format()
+                output_format = self.left_panel.get_output_format()
                 processed_name = self.get_output_filename(original_name, output_format)
                 processed_path = os.path.join(self.output_folder, processed_name)
                 
-                # Store it in track data
                 track['processed_path'] = processed_path
                 
-                # Also store in table item
-                name_item = self.track_table.item(index, 0)
+                name_item = self.center_panel.track_table.item(index, 0)
                 if name_item:
                     name_item.setData(Qt.UserRole + 1, processed_path)
         
         elif "Skipped by user" in message:
             pass
         else:
-            self.track_table.update_track_status(index, 'error')
-
+            self.center_panel.track_table.update_track_status(index, 'error')
 
     def on_progress_updated(self, current, total):
         """Handle progress update"""
-        self.progress_bar.setValue(current)
+        self.left_panel.update_progress(
+            self.left_panel.progress_label.text(),
+            value=current
+        )
 
-    def pause_processing(self):
-        """Pause the processing queue"""
-        self.bg_processor.pause_processing()
-        self.progress_label.setText("Paused...")
-
-    def resume_processing(self):
-        """Resume the processing queue"""
-        self.bg_processor.resume_processing()
-        self.progress_label.setText("Resumed...")
+    def on_all_completed(self, processed, total):
+        """Handle all processing completed"""
+        self.left_panel.update_progress(f"Complete! {processed}/{total}")
+        self.left_panel.hide_progress()
+        self.left_panel.set_processing_state(False)
 
     def skip_track(self, track_index):
         """Skip individual track"""
         self.bg_processor.skip_track(track_index)
-        self.track_table.update_track_status(track_index, 'skipped')
+        self.center_panel.track_table.update_track_status(track_index, 'skipped')
     
     def remove_track(self, track_index):
-        """Remove individual track from list"""
+        """Remove individual track"""
         if 0 <= track_index < len(self.tracks):
-            # Remove from tracks list
             del self.tracks[track_index]
-            # Remove from table
-            self.track_table.removeRow(track_index)
+            self.center_panel.track_table.removeRow(track_index)
 
     def setup_folder_watching(self):
-        """Initialize folder watching for enabled folders"""
+        """Initialize folder watching"""
         for folder_config in self.watch_config.get_enabled_folders():
             self.folder_watcher.add_watch(folder_config['path'], folder_config)
         
-        # Connect file detection signal
         self.folder_watcher.file_detected.connect(self.on_file_detected)
+
+    def on_watch_added(self, path, config):
+        """Handle watch folder added"""
+        self.folder_watcher.add_watch(path, config)
+
+    def on_watch_removed(self, path):
+        """Handle watch folder removed"""
+        self.folder_watcher.remove_watch(path)
+
+    def on_watch_toggled(self, path, enabled):
+        """Handle watch folder toggled"""
+        if enabled:
+            for config in self.watch_config.watched_folders:
+                if config['path'] == path:
+                    self.folder_watcher.add_watch(path, config)
+                    break
+        else:
+            self.folder_watcher.remove_watch(path)
 
     def on_file_detected(self, file_path, watch_folder_path):
         """Handle new file detected in watched folder"""
-        # Find the config for this watch folder
         config = None
         for folder_config in self.watch_config.watched_folders:
             if folder_config['path'] == watch_folder_path:
@@ -823,26 +275,17 @@ class MainWindow(QMainWindow):
         if not config or not config.get('enabled', True):
             return
         
-        # IGNORE ALREADY PROCESSED FILES (prevents infinite loop)
         filename = os.path.basename(file_path)
         if self._is_processed_file(filename):
-            if hasattr(self, 'folder_watch_panel'):
-                self.folder_watch_panel.log_activity(f"Ignored processed file: {filename}")
+            self.center_panel.folder_watch_panel.log_activity(f"Ignored processed file: {filename}")
             return
         
-        # Check for duplicates
         for track in self.tracks:
             if track['path'] == file_path:
-                if hasattr(self, 'folder_watch_panel'):
-                    self.folder_watch_panel.log_activity(f"Duplicate skipped: {os.path.basename(file_path)}")
+                self.center_panel.folder_watch_panel.log_activity(f"Duplicate skipped: {os.path.basename(file_path)}")
                 return
         
-        # Log detection
-        if hasattr(self, 'folder_watch_panel'):
-            self.folder_watch_panel.log_file_detected(file_path)
-        
-        # Analyze in background (non-blocking)
-        from PySide6.QtCore import QThread
+        self.center_panel.folder_watch_panel.log_file_detected(file_path)
         
         class TrackAnalyzer(QThread):
             def __init__(self, analyzer, file_path):
@@ -870,10 +313,9 @@ class MainWindow(QMainWindow):
             preset = self.preset_manager.get_preset(config['presetId'])
             target_lufs = preset['target_lufs'] if preset else -12.0
             
-            self.track_table.add_track(track_data, target_lufs)
-            self.update_health_display()
+            self.center_panel.track_table.add_track(track_data, target_lufs)
+            self.right_panel.update_health_display(self.tracks)
             
-            # Auto-process if enabled
             if config.get('autoProcess', True):
                 self.auto_process_track(len(self.tracks) - 1, config)
         
@@ -884,40 +326,34 @@ class MainWindow(QMainWindow):
             self._analyzer_threads = []
         self._analyzer_threads.append(analyzer_thread)
 
-
     def _add_track_async(self, file_path, target_lufs=None):
-        """Add track with background analysis (non-blocking)"""
-        from PySide6.QtCore import QThread
-        from PySide6.QtGui import QColor
-        
-        # Add placeholder row immediately for visual feedback
+        """Add track with background analysis"""
         filename = os.path.basename(file_path)
         
-        row_index = self.track_table.rowCount()
-        self.track_table.insertRow(row_index)
+        row_index = self.center_panel.track_table.rowCount()
+        self.center_panel.track_table.insertRow(row_index)
         
         # Add placeholder cells
-        name_item = self.track_table._create_item(filename)
-        name_item.setData(Qt.UserRole, file_path)  # Store path immediately
-        self.track_table.setItem(row_index, 0, name_item)
-        self.track_table.setItem(row_index, 1, self.track_table._create_item("...", center=True))
-        self.track_table.setItem(row_index, 2, self.track_table._create_item("...", center=True))
-        self.track_table.setItem(row_index, 3, self.track_table._create_item("--", center=True))  # Show -- before processing
-        self.track_table.setItem(row_index, 4, self.track_table._create_item("...", center=True))
-        self.track_table.setItem(row_index, 5, self.track_table._create_item("...", center=True))
+        name_item = self.center_panel.track_table._create_item(filename)
+        name_item.setData(Qt.UserRole, file_path)
+        self.center_panel.track_table.setItem(row_index, 0, name_item)
+        self.center_panel.track_table.setItem(row_index, 1, self.center_panel.track_table._create_item("...", center=True))
+        self.center_panel.track_table.setItem(row_index, 2, self.center_panel.track_table._create_item("...", center=True))
+        self.center_panel.track_table.setItem(row_index, 3, self.center_panel.track_table._create_item("--", center=True))
+        self.center_panel.track_table.setItem(row_index, 4, self.center_panel.track_table._create_item("...", center=True))
+        self.center_panel.track_table.setItem(row_index, 5, self.center_panel.track_table._create_item("...", center=True))
         
-        analyzing_item = self.track_table._create_item("⏳ ANALYZING", center=True)
+        analyzing_item = self.center_panel.track_table._create_item("⏳ ANALYZING", center=True)
         analyzing_item.setBackground(QColor("#ffaa00"))
         analyzing_item.setForeground(QColor("black"))
-        self.track_table.setItem(row_index, 6, analyzing_item)
-        self.track_table.setItem(row_index, 7, self.track_table._create_item("--", center=True))
+        self.center_panel.track_table.setItem(row_index, 6, analyzing_item)
+        self.center_panel.track_table.setItem(row_index, 7, self.center_panel.track_table._create_item("--", center=True))
         
-        status_item = self.track_table._create_item("⏳ ANALYZING", center=True)
+        status_item = self.center_panel.track_table._create_item("⏳ ANALYZING", center=True)
         status_item.setBackground(QColor("#ffaa00"))
         status_item.setForeground(QColor("black"))
-        self.track_table.setItem(row_index, 8, status_item)
+        self.center_panel.track_table.setItem(row_index, 8, status_item)
         
-        # Add placeholder to tracks list
         placeholder_data = {
             'path': file_path,
             'name': filename,
@@ -944,7 +380,6 @@ class MainWindow(QMainWindow):
         def on_analysis_complete():
             analysis = analyzer_thread.analysis
             
-            # Update track data in place
             track_data = {
                 'path': file_path,
                 'name': filename,
@@ -952,51 +387,45 @@ class MainWindow(QMainWindow):
             }
             self.tracks[row_index] = track_data
             
-            # Update cells in place (no remove/insert!)
-            # Duration
+            # Update cells
             duration = track_data.get('duration', 0)
             time_str = f"{int(duration//60)}:{int(duration%60):02d}" if duration > 0 else "0:00"
-            self.track_table.setItem(row_index, 1, self.track_table._create_item(time_str, center=True))
+            self.center_panel.track_table.setItem(row_index, 1, self.center_panel.track_table._create_item(time_str, center=True))
             
-            # Before LUFS
             before_lufs = track_data['lufs']
-            lufs_item = self.track_table._create_item(f"{before_lufs:.1f}", center=True)
-            lufs_item.setBackground(self.track_table._get_lufs_color(before_lufs))
+            lufs_item = self.center_panel.track_table._create_item(f"{before_lufs:.1f}", center=True)
+            lufs_item.setBackground(self.center_panel.track_table._get_lufs_color(before_lufs))
             if before_lufs < -16 or before_lufs > -6:
                 lufs_item.setForeground(QColor("white"))
-            self.track_table.setItem(row_index, 2, lufs_item)
+            self.center_panel.track_table.setItem(row_index, 2, lufs_item)
             
-            # After LUFS - check if already optimized
             peak = track_data['peak_db']
-            is_optimized = self.track_table._check_if_optimized(before_lufs, peak, target_lufs)
+            is_optimized = self.center_panel.track_table._check_if_optimized(before_lufs, peak, target_lufs)
             
             if is_optimized:
-                after_item = self.track_table._create_item(f"{before_lufs:.1f}", center=True)
+                after_item = self.center_panel.track_table._create_item(f"{before_lufs:.1f}", center=True)
                 after_item.setBackground(QColor("#00aa44"))
                 after_item.setForeground(QColor("white"))
-                self.track_table.setItem(row_index, 3, after_item)
+                self.center_panel.track_table.setItem(row_index, 3, after_item)
             else:
                 if target_lufs:
-                    self.track_table.setItem(row_index, 3, self.track_table._create_item(f"{target_lufs:.1f}", center=True))
+                    self.center_panel.track_table.setItem(row_index, 3, self.center_panel.track_table._create_item(f"{target_lufs:.1f}", center=True))
                 else:
-                    self.track_table.setItem(row_index, 3, self.track_table._create_item("--", center=True))
+                    self.center_panel.track_table.setItem(row_index, 3, self.center_panel.track_table._create_item("--", center=True))
             
-            # Peak
-            peak_item = self.track_table._create_item(f"{peak:.1f}", center=True)
+            peak_item = self.center_panel.track_table._create_item(f"{peak:.1f}", center=True)
             if peak > -1:
                 peak_item.setBackground(QColor("#ff4444"))
                 peak_item.setForeground(QColor("white"))
-            self.track_table.setItem(row_index, 4, peak_item)
+            self.center_panel.track_table.setItem(row_index, 4, peak_item)
             
-            # Health Score
             health_score = track_data.get('health_score', 0)
-            health_item = self.track_table._create_item(f"{health_score}", center=True)
-            health_item.setBackground(self.track_table._get_health_color(health_score))
+            health_item = self.center_panel.track_table._create_item(f"{health_score}", center=True)
+            health_item.setBackground(self.center_panel.track_table._get_health_color(health_score))
             health_item.setForeground(QColor("white"))
-            self.track_table.setItem(row_index, 5, health_item)
+            self.center_panel.track_table.setItem(row_index, 5, health_item)
             
-            # Club Safe badge
-            club_safe = self.track_table.is_club_safe(before_lufs, peak)
+            club_safe = self.center_panel.track_table.is_club_safe(before_lufs, peak)
             if is_optimized and club_safe:
                 badge_text = "🟢 OPTIMIZED"
                 badge_color = "#00aa44"
@@ -1007,32 +436,30 @@ class MainWindow(QMainWindow):
                 badge_text = "🔴 FIX"
                 badge_color = "#aa4444"
             
-            badge_item = self.track_table._create_item(badge_text, center=True)
+            badge_item = self.center_panel.track_table._create_item(badge_text, center=True)
             badge_item.setBackground(QColor(badge_color))
             badge_item.setForeground(QColor("white"))
-            self.track_table.setItem(row_index, 6, badge_item)
+            self.center_panel.track_table.setItem(row_index, 6, badge_item)
             
-            # Gain
             if is_optimized:
-                gain_item = self.track_table._create_item("✓", center=True)
+                gain_item = self.center_panel.track_table._create_item("✓", center=True)
                 gain_item.setBackground(QColor("#00aa44"))
                 gain_item.setForeground(QColor("white"))
-                self.track_table.setItem(row_index, 7, gain_item)
+                self.center_panel.track_table.setItem(row_index, 7, gain_item)
             else:
-                self.track_table.setItem(row_index, 7, self.track_table._create_item("--", center=True))
+                self.center_panel.track_table.setItem(row_index, 7, self.center_panel.track_table._create_item("--", center=True))
             
-            # Status
             if is_optimized:
-                status_item = self.track_table._create_item("✅ OPTIMIZED", center=True)
+                status_item = self.center_panel.track_table._create_item("✅ OPTIMIZED", center=True)
                 status_item.setBackground(QColor("#00aa44"))
                 status_item.setForeground(QColor("white"))
             else:
-                status_item = self.track_table._create_item("READY", center=True)
+                status_item = self.center_panel.track_table._create_item("READY", center=True)
                 status_item.setBackground(QColor("#4444aa"))
                 status_item.setForeground(QColor("white"))
-            self.track_table.setItem(row_index, 8, status_item)
+            self.center_panel.track_table.setItem(row_index, 8, status_item)
             
-            self.update_health_display()
+            self.right_panel.update_health_display(self.tracks)
         
         analyzer_thread.finished.connect(on_analysis_complete)
         analyzer_thread.start()
@@ -1041,36 +468,23 @@ class MainWindow(QMainWindow):
             self._analyzer_threads = []
         self._analyzer_threads.append(analyzer_thread)
 
-
-
-
     def auto_process_track(self, track_index, config):
-        """Auto-process a single track from watched folder (non-blocking)"""
+        """Auto-process single track from watched folder"""
         if track_index >= len(self.tracks):
             return
         
         track = self.tracks[track_index]
-        
-        # Get output folder
         output_folder = config.get('outputFolder', config['path'])
-        
-        # Process the track
         input_path = track['path']
         filename = track['name']
         
-        # Use the preset's output format
         preset = self.preset_manager.get_preset(config['presetId'])
         output_format = preset.get('output_format', 'wav_24') if preset else 'wav_24'
         
-        # Generate output filename
         output_filename = self.bg_processor.get_output_filename(filename, output_format)
         output_path = os.path.join(output_folder, output_filename)
         
-        # Update status
-        self.track_table.update_track_status(track_index, 'processing')
-        
-        # Process in background thread (NON-BLOCKING!)
-        from PySide6.QtCore import QThread
+        self.center_panel.track_table.update_track_status(track_index, 'processing')
         
         class SingleTrackProcessor(QThread):
             def __init__(self, processor, input_path, preset_id, output_path, output_format):
@@ -1090,7 +504,6 @@ class MainWindow(QMainWindow):
                     self.output_format
                 )
         
-        # Create and start thread
         thread = SingleTrackProcessor(
             self.processor, 
             input_path, 
@@ -1099,41 +512,91 @@ class MainWindow(QMainWindow):
             output_format
         )
         
-        # Handle completion
         def on_finished():
             result = thread.result
             
             if result and result['success']:
-                self.track_table.update_track_status(track_index, 'completed')
+                self.center_panel.track_table.update_track_status(track_index, 'completed')
                 after_lufs = result.get('final_lufs', -12.0)
                 final_peak = -1.0
-                self.track_table.update_after_processing(track_index, after_lufs, final_peak)
+                self.center_panel.track_table.update_after_processing(track_index, after_lufs, final_peak)
                 
-                # DELETE ORIGINAL IF ENABLED
                 if config.get('deleteOriginal', False):
                     try:
                         os.remove(input_path)
-                        if hasattr(self, 'folder_watch_panel'):
-                            self.folder_watch_panel.log_activity(f"🗑 Deleted original: {filename}")
+                        self.center_panel.folder_watch_panel.log_activity(f"🗑 Deleted original: {filename}")
                     except Exception as e:
-                        if hasattr(self, 'folder_watch_panel'):
-                            self.folder_watch_panel.log_activity(f"⚠️ Failed to delete: {filename} - {str(e)}")
+                        self.center_panel.folder_watch_panel.log_activity(f"⚠️ Failed to delete: {filename} - {str(e)}")
                 
-                if hasattr(self, 'folder_watch_panel'):
-                    self.folder_watch_panel.log_file_processed(input_path, True)
+                self.center_panel.folder_watch_panel.log_file_processed(input_path, True)
             else:
-                self.track_table.update_track_status(track_index, 'error')
-                if hasattr(self, 'folder_watch_panel'):
-                    self.folder_watch_panel.log_file_processed(input_path, False)
+                self.center_panel.track_table.update_track_status(track_index, 'error')
+                self.center_panel.folder_watch_panel.log_file_processed(input_path, False)
         
         thread.finished.connect(on_finished)
         thread.start()
         
-        # Store thread reference to prevent garbage collection
         if not hasattr(self, '_auto_process_threads'):
             self._auto_process_threads = []
         self._auto_process_threads.append(thread)
 
+    def get_output_filename(self, original_name, output_format):
+        """Generate output filename"""
+        clean_name = self.clean_filename(original_name)
+        
+        if output_format == "aiff":
+            ext = ".aiff"
+        elif output_format == "flac":
+            ext = ".flac"
+        else:
+            ext = ".wav"
+        
+        naming = self.left_panel.get_naming_convention()
+        if naming == "Original - DJ OPT":
+            return f"{clean_name} - DJ OPT{ext}"
+        elif naming == "DJ OPT - Original":
+            return f"DJ OPT - {clean_name}{ext}"
+        elif naming == "Original (Optimized)":
+            return f"{clean_name} (Optimized){ext}"
+        elif naming == "Original_DJ_OPT":
+            return f"{clean_name}_DJ_OPT{ext}"
+        else:
+            return f"{clean_name} - DJ OPT{ext}"
+
+    def clean_filename(self, filename):
+        """Clean filename by removing unwanted phrases"""
+        import re
+        
+        base_name = os.path.splitext(filename)[0]
+        
+        unwanted_phrases = [
+            r'\(official\s+video\)', r'\(official\s+audio\)',
+            r'\(official\s+music\s+video\)', r'\(music\s+video\)',
+            r'\(lyric\s+video\)', r'\(lyrics\)', r'\(hd\)', r'\(4k\)',
+            r'\(1080p\)', r'\(720p\)', r'\[official\s+video\]',
+            r'\[official\s+audio\]', r'\[official\s+music\s+video\]',
+            r'\[music\s+video\]', r'\[lyric\s+video\]', r'\[lyrics\]',
+            r'\[hd\]', r'\[4k\]', r'\[1080p\]', r'\[720p\]',
+            r'official\s+video', r'official\s+audio',
+            r'official\s+music\s+video', r'music\s+video',
+            r'lyric\s+video', r'lyrics'
+        ]
+        
+        cleaned_name = base_name
+        for phrase in unwanted_phrases:
+            cleaned_name = re.sub(phrase, '', cleaned_name, flags=re.IGNORECASE)
+        
+        cleaned_name = re.sub(r'\s+', ' ', cleaned_name)
+        cleaned_name = re.sub(r'\s*-\s*$', '', cleaned_name)
+        cleaned_name = re.sub(r'^\s*-\s*', '', cleaned_name)
+        cleaned_name = cleaned_name.strip()
+        
+        return cleaned_name if cleaned_name else base_name
+
+    def _is_processed_file(self, filename):
+        """Check if filename indicates already processed"""
+        processed_patterns = ['- DJ OPT', 'DJ OPT -', '(Optimized)', '_DJ_OPT']
+        return any(pattern in filename for pattern in processed_patterns)
     
     def setup_dark_theme(self):
         """Apply clean dark theme"""
@@ -1243,8 +706,6 @@ class MainWindow(QMainWindow):
                 background-color: #00ff88;
             }
         """)
-
-
 
     def closeEvent(self, event):
         """Clean up when closing the app"""

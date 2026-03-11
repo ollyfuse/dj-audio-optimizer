@@ -12,7 +12,7 @@ class WatchFolderDialog(QDialog):
         self.folder_path = folder_path
         self.setWindowTitle("Configure Watched Folder")
         self.setModal(True)
-        self.setMinimumWidth(400)
+        self.setMinimumWidth(500)  # Increased from 400 to show longer paths
         self.init_ui()
     
     def init_ui(self):
@@ -21,10 +21,11 @@ class WatchFolderDialog(QDialog):
         # Folder path
         form = QFormLayout()
         
-        folder_label = QLabel(self.folder_path)
-        folder_label.setWordWrap(True)
-        folder_label.setStyleSheet("color: #00ff88; font-weight: bold;")
-        form.addRow("Folder:", folder_label)
+        # Use read-only QLineEdit instead of QLabel for scrollable text
+        folder_display = QLineEdit(self.folder_path)
+        folder_display.setReadOnly(True)
+        folder_display.setStyleSheet("color: #00ff88; font-weight: bold; background: transparent; border: none;")
+        form.addRow("Folder:", folder_display)
         
         # Preset selector
         self.preset_combo = QComboBox()
@@ -39,8 +40,8 @@ class WatchFolderDialog(QDialog):
 
         # Delete original checkbox
         self.delete_original_check = QCheckBox("Delete original file after successful processing")
-        self.delete_original_check.setChecked(False)  # Default to safe (keep originals)
-        self.delete_original_check.setStyleSheet("color: #ff8800;")  # Orange warning color
+        self.delete_original_check.setChecked(False)
+        self.delete_original_check.setStyleSheet("color: #ff8800;")
         form.addRow("", self.delete_original_check)
         
         # Output folder
@@ -93,6 +94,5 @@ class WatchFolderDialog(QDialog):
             'presetId': self.preset_combo.currentData(),
             'autoProcess': self.auto_check.isChecked(),
             'outputFolder': output_folder,
-            'deleteOriginal': self.delete_original_check.isChecked()  # NEW
+            'deleteOriginal': self.delete_original_check.isChecked()
         }
-

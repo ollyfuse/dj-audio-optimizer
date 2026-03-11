@@ -46,7 +46,7 @@ class WatchConfig:
             'presetId': preset_id,
             'autoProcess': auto_process,
             'outputFolder': output_folder,
-            'deleteOriginal': delete_original,  # NEW
+            'deleteOriginal': delete_original,  
             'enabled': True
         })
         self.save()

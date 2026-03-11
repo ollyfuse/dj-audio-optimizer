@@ -10,6 +10,14 @@
       "autoProcess": true,
       "outputFolder": "/Users/admin/Desktop/Music/test-auto-watcher",
       "deleteOriginal": true,
+      "enabled": false
+    },
+    {
+      "path": "/Users/admin/Desktop/testinggg",
+      "presetId": "club_festival",
+      "autoProcess": true,
+      "outputFolder": "/Users/admin/Desktop/testinggg",
+      "deleteOriginal": false,
       "enabled": true
     }
   ]
