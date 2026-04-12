@@ -12,39 +12,34 @@ class WatchFolderDialog(QDialog):
         self.folder_path = folder_path
         self.setWindowTitle("Configure Watched Folder")
         self.setModal(True)
-        self.setMinimumWidth(500)  # Increased from 400 to show longer paths
+        self.setMinimumWidth(500)
         self.init_ui()
     
     def init_ui(self):
         layout = QVBoxLayout(self)
         
-        # Folder path
         form = QFormLayout()
         
-        # Use read-only QLineEdit instead of QLabel for scrollable text
         folder_display = QLineEdit(self.folder_path)
         folder_display.setReadOnly(True)
         folder_display.setStyleSheet("color: #00ff88; font-weight: bold; background: transparent; border: none;")
         form.addRow("Folder:", folder_display)
         
-        # Preset selector
+        # Use get_all_presets() so custom presets appear alongside default ones
         self.preset_combo = QComboBox()
-        for preset_key, preset in self.preset_manager.presets.items():
+        for preset_key, preset in self.preset_manager.get_all_presets().items():
             self.preset_combo.addItem(preset['label'], preset_key)
         form.addRow("Preset:", self.preset_combo)
         
-        # Auto-process checkbox
         self.auto_check = QCheckBox("Automatically process new files")
         self.auto_check.setChecked(True)
         form.addRow("", self.auto_check)
 
-        # Delete original checkbox
         self.delete_original_check = QCheckBox("Delete original file after successful processing")
         self.delete_original_check.setChecked(False)
         self.delete_original_check.setStyleSheet("color: #ff8800;")
         form.addRow("", self.delete_original_check)
         
-        # Output folder
         output_layout = QHBoxLayout()
         self.output_edit = QLineEdit()
         self.output_edit.setPlaceholderText("Same as source folder")
@@ -56,7 +51,6 @@ class WatchFolderDialog(QDialog):
         
         layout.addLayout(form)
         
-        # Buttons
         btn_layout = QHBoxLayout()
         ok_btn = QPushButton("Add Folder")
         ok_btn.clicked.connect(self.accept)

@@ -187,6 +187,27 @@ class PresetEditorDialog(QDialog):
             self.warning_label.setStyleSheet("color: #00ff88; font-size: 11px;")
             self.save_btn.setEnabled(True)
     
+    def _generate_preset_id(self, label):
+        """Generate a safe, unique preset ID from a label"""
+        import re
+        # Replace any character that isn't a letter, number, or underscore with underscore
+        base_id = re.sub(r'[^a-z0-9]', '_', label.lower())
+        # Collapse multiple underscores into one and strip leading/trailing ones
+        base_id = re.sub(r'_+', '_', base_id).strip('_')
+        
+        if not base_id:
+            base_id = 'custom_preset'
+        
+        # Check for collision — append a number if ID already exists
+        all_presets = self.preset_manager.get_all_presets()
+        if base_id not in all_presets:
+            return base_id
+        
+        counter = 2
+        while f"{base_id}_{counter}" in all_presets:
+            counter += 1
+        return f"{base_id}_{counter}"
+
     def save_preset(self):
         """Save the preset"""
         self.preset_data['label'] = self.name_input.text().strip()
@@ -198,7 +219,7 @@ class PresetEditorDialog(QDialog):
             return
         
         if not self.is_edit_mode:
-            preset_id = self.preset_data['label'].lower().replace(' ', '_')
+            preset_id = self._generate_preset_id(self.preset_data['label'])
             result = self.preset_manager.create_preset(preset_id, self.preset_data)
         else:
             result = self.preset_manager.update_preset(self.preset_id, self.preset_data)

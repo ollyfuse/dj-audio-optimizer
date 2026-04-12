@@ -5,14 +5,6 @@
   "temp_folder": "./temp",
   "watchedFolders": [
     {
-      "path": "/Users/admin/Desktop/Music/test-auto-watcher",
-      "presetId": "club_festival",
-      "autoProcess": true,
-      "outputFolder": "/Users/admin/Desktop/Music/test-auto-watcher",
-      "deleteOriginal": true,
-      "enabled": false
-    },
-    {
       "path": "/Users/admin/Desktop/testinggg",
       "presetId": "club_festival",
       "autoProcess": true,
@@ -20,5 +12,23 @@
       "deleteOriginal": false,
       "enabled": true
     }
-  ]
+  ],
+  "folderSnapshots": {
+    "/Users/admin/Desktop/testinggg": {
+      "54 - Kevin Klein - Mana bana Nanjye Ft. Melissa Nyarwaya - DJ OPT.wav": 1775872062.5129724,
+      "04 - Zaho - Je Te Promets (Clip Officiel) (Optimized).wav": 1772832284.709971,
+      "02 - Sheryfa Luna - Il Avait Les Mots (Clip officiel) (Optimized).wav": 1772832289.770182,
+      "CECILE KAYIREBWA- Urubamby'Ingwe ( Audio) - DJ OPT.wav": 1773244350.715542,
+      "CECILE KAYIREBWA- Urubamby'Ingwe ( Audio).mp3": 1771688149.4782438,
+      "55 - Kevin Klein - Oka - DJ OPT.wav": 1775872008.0574582,
+      "01 - Diam's - Confessions nocturnes feat. Vitaa (Clip officiel) (Optimized).wav": 1772832292.2647243,
+      "03 - Vitaa - A Fleur de Toi (Optimized).wav": 1772832286.6221104,
+      "IBIHANGANGE cover by BALLET Irebero Ft Ingangare test - DJ OPT.wav": 1775871642.0887344,
+      "53 - EeQue, Pcee & Royal MusiQ - Ke Wave - DJ OPT.wav": 1775872054.7006798,
+      "05 - L\u00e9a Castel - Derni\u00e8re Chance ft. Soprano (Optimized).wav": 1772832332.0442924,
+      "IBIHANGANGE cover by  BALLET Irebero Ft  Ingangare test.mp3": 1771687489.9601493,
+      "52 - DJ Maphorisa, DJ Tunez, Wizkid & Mavo - MONEY CONSTANT - DJ OPT.wav": 1775872095.183309,
+      "Se Pa Pou dat 2.mp3": 1775864683.7400017
+    }
+  }
 }

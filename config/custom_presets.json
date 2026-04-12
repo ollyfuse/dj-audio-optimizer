@@ -1,1 +1,20 @@
-{}
+{
+  "new_preset": {
+    "label": "New Preset",
+    "description": "Custom preset",
+    "target_lufs": -12.0,
+    "true_peak": -1.0,
+    "highpass_hz": 30,
+    "eq": {
+      "low_cut_db": -1.0,
+      "mid_cut_db": -0.5,
+      "high_boost_db": 0.5
+    },
+    "compression": {
+      "low": 1.5,
+      "mid": 1.3,
+      "high": 1.2
+    },
+    "output_format": "wav_24"
+  }
+}

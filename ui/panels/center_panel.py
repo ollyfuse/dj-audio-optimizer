@@ -62,6 +62,7 @@ class CenterPanel(QFrame):
         
         # Drag & drop area
         drop_area = DragDropWidget("📁 Drag & Drop Audio Files Here\n\nOr click 'Add Tracks' below")
+        drop_area.setMinimumHeight(120)
         drop_area.files_dropped.connect(self.files_dropped.emit)
         library_layout.addWidget(drop_area)
         

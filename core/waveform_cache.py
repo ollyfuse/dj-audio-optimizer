@@ -74,7 +74,8 @@ class WaveformCache:
         """Generate unique cache key from file path"""
         # Use hash of absolute path for consistent key
         abs_path = str(Path(audio_path).resolve())
-        return hashlib.md5(abs_path.encode()).hexdigest()
+        return hashlib.sha256(abs_path.encode()).hexdigest()
+
     
     def _is_cache_valid(self, audio_path, cached_data):
         """Check if cached data is still valid"""
